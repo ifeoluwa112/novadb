@@ -1,0 +1,33 @@
+# Ignore Rust build artifacts
+/target
+**/*.rlib
+**/*.rmeta
+**/*.d
+**/*.so
+**/*.dylib
+**/*.dll
+**/*.exe
+**/*.out
+
+# Ignore generated documentation
+/doc
+
+# Ignore Cargo lock for local builds if you only want source code
+Cargo.lock
+
+# Ignore common editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+*.log
+*.tmp
+
+# Ignore temporary files created by various tools
+*.pid
+*.seed
+
+# Ignore package manager caches
+/node_modules

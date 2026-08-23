@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/novadb",
+    "crates/novadb-storage",
+    "crates/novadb-protocol",
+    "crates/novadb-network",
+    "crates/novadb-cli", "crates/novadb-common",
+]
