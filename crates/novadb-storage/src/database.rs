@@ -47,15 +47,7 @@ impl Database {
         self.data
             .insert(key.to_string(), Entry::new_with_ttl(value.to_string(), ttl));
     }
-
-    // Checks if an entry has expired based on its expiration time.
-    // fn is_expired(entry: &Entry) -> bool {
-    //     match entry.expires_at {
-    //         Some(expires_at) => Instant::now() >= expires_at,
-    //         None => false,
-    //     }
-    // }
-
+    
     // Gets the value associated with a key in the database.
     pub fn get(&self, key: &str) -> Option<&str> {
         let entry = self.data.get(key)?;

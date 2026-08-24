@@ -1,0 +1,8 @@
+[package]
+name = "novadb-server"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+novadb-storage = { path = "../novadb-storage" }
+novadb-common = { path = "../novadb-common" }
