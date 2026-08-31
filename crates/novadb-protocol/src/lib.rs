@@ -1,3 +1,8 @@
+pub mod resp;
+pub mod command;
+pub use resp::{RespValue, RespError, parse_resp};
+pub use command::parse_command;
+
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
 }

@@ -1,22 +1,20 @@
+use std::{thread, time::Duration};
+
 use novadb_common::parse;
 use novadb_server::executor::execute;
 use novadb_storage::Database;
 
 fn main() {
     let mut db = Database::new();
+    execute(&mut db, parse("SET session abc123 2").unwrap());
 
-    execute(&mut db, parse("SET name Precious").unwrap());
-    execute(&mut db, parse("SET language Rust").unwrap());
+    execute(&mut db, parse("GET session").unwrap());
 
-    execute(&mut db, parse("GET name").unwrap());
-    execute(&mut db, parse("GET language").unwrap());
+    execute(&mut db, parse("TTL session").unwrap());
 
-    execute(&mut db, parse("EXISTS name").unwrap());
-    execute(&mut db, parse("EXISTS country").unwrap());
+    thread::sleep(Duration::from_secs(3));
 
-    execute(&mut db, parse("KEYS").unwrap());
+    execute(&mut db, parse("GET session").unwrap());
 
-    execute(&mut db, parse("DELETE language").unwrap());
-
-    execute(&mut db, parse("GET language").unwrap());
+    execute(&mut db, parse("TTL session").unwrap());
 }

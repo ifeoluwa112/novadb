@@ -1,14 +1,26 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
-    Set { key: String, value: String },
+    Set {
+        key: String,
+        value: String,
+        ttl: Option<u64>,
+    },
 
-    Get { key: String },
+    Get {
+        key: String,
+    },
 
-    Delete { key: String },
+    Delete {
+        key: String,
+    },
 
-    Exists { key: String },
+    Exists {
+        key: String,
+    },
 
     Keys,
 
-    Ttl { key: String },
+    Ttl {
+        key: String,
+    },
 }
