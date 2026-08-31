@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+novadb-common = { path = "../novadb-common" }
+novadb-storage = { path = "../novadb-storage" }
+novadb-server = { path = "../novadb-server" }
