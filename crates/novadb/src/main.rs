@@ -1,7 +1,7 @@
 use novadb_common::{encode_response, parse};
 use novadb_server::execute;
 use novadb_storage::Database;
-use novadb_network::start_server;
+use novadb_network::run;
 
 fn _run_command(db: &mut Database, input: &str) {
     let command = parse(input).unwrap();
@@ -12,6 +12,6 @@ fn _run_command(db: &mut Database, input: &str) {
 }
 
 fn main() -> std::io::Result<()> {
-    start_server("127.0.0.1:6379")?;
+    run()?;
     Ok(())
 }

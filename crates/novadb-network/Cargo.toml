@@ -4,3 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+novadb-protocol = { path = "../novadb-protocol" }
+novadb-common = { path = "../novadb-common" }
