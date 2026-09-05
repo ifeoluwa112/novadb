@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 novadb-protocol = { path = "../novadb-protocol" }
 novadb-common = { path = "../novadb-common" }
+novadb-server = { path = "../novadb-server" }
+novadb-storage = { path = "../novadb-storage" }
