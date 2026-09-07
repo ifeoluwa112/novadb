@@ -2,20 +2,40 @@ use novadb_common::encode_response;
 use novadb_protocol::{parse_command, parse_resp};
 use novadb_server::execute;
 use novadb_storage::Database;
+
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
+use std::sync::{Arc, Mutex};
 
 pub fn run() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379")?;
 
     println!("NovaDB listening on 127.0.0.1:6379");
 
-    let (mut stream, address) = listener.accept()?;
+    let database = Arc::new(Mutex::new(Database::new()));
 
-    println!("Client connected: {address}");
+    for stream in listener.incoming() {
+        let stream = stream?;
 
-    let mut db = Database::new();
+        let address = stream.peer_addr()?;
+
+        println!("Client connected: {address}");
+
+        let database = Arc::clone(&database);
+
+        std::thread::spawn(move || {
+            if let Err(error) = handle_client(stream, database) {
+                println!("Client error: {error}");
+            }
+        });
+    }
+
+    Ok(())
+}
+
+fn handle_client(mut stream: TcpStream, database: Arc<Mutex<Database>>) -> std::io::Result<()> {
     let mut read_buffer = [0u8; 1024];
+
     let mut receive_buffer = Vec::new();
 
     loop {
@@ -36,7 +56,12 @@ pub fn run() -> std::io::Result<()> {
                     match parse_command(value) {
                         Ok(command) => {
                             println!("Parsed command: {command:?}");
-                            let response = execute(&mut db, command);
+
+                            let response = {
+                                let mut db = database.lock().unwrap();
+
+                                execute(&mut db, command)
+                            };
 
                             let encoded = encode_response(&response);
 
@@ -59,6 +84,7 @@ pub fn run() -> std::io::Result<()> {
 
                 Err(error) => {
                     println!("Protocol error: {error:?}");
+
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         format!("{error:?}"),
