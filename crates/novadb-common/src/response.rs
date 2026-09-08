@@ -18,6 +18,10 @@ pub fn encode_response(response: &Response) -> String {
     }
 }
 
+pub fn encode_error(message: &str) -> String {
+    format!("-ERR {}\r\n", message).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +59,10 @@ mod tests {
         let response = Response::Null;
 
         assert_eq!(encode_response(&response), "$-1\r\n");
+    }
+
+    #[test]
+    fn encodes_error() {
+        assert_eq!(encode_error("unknown command"), "-ERR unknown command\r\n");
     }
 }

@@ -1,4 +1,4 @@
-use novadb_common::encode_response;
+use novadb_common::{encode_error, encode_response};
 use novadb_protocol::{parse_command, parse_resp};
 use novadb_server::execute;
 use novadb_storage::Database;
@@ -72,6 +72,10 @@ fn handle_client(mut stream: TcpStream, database: Arc<Mutex<Database>>) -> std::
 
                         Err(error) => {
                             println!("Command error: {error:?}");
+
+                            let encoded = encode_error(&format!("{error:?}"));
+
+                            stream.write_all(encoded.as_bytes())?;
                         }
                     }
 
