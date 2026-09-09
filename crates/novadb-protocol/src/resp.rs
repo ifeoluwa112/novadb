@@ -1,3 +1,4 @@
+use std::fmt;
 use std::usize;
 
 #[derive(Debug, PartialEq)]
@@ -11,6 +12,16 @@ pub enum RespValue {
 pub enum RespError {
     Incomplete,
     Invalid(String),
+}
+
+impl fmt::Display for RespError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RespError::Incomplete => write!(f, "incomplete request"),
+
+            RespError::Invalid(message) => write!(f, "{message}"),
+        }
+    }
 }
 
 fn find_crlf(input: &[u8]) -> Option<usize> {

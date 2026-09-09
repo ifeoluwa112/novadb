@@ -73,7 +73,7 @@ fn handle_client(mut stream: TcpStream, database: Arc<Mutex<Database>>) -> std::
                         Err(error) => {
                             println!("Command error: {error:?}");
 
-                            let encoded = encode_error(&format!("{error:?}"));
+                            let encoded = encode_error(&error.to_string());
 
                             stream.write_all(encoded.as_bytes())?;
                         }
@@ -89,10 +89,12 @@ fn handle_client(mut stream: TcpStream, database: Arc<Mutex<Database>>) -> std::
                 Err(error) => {
                     println!("Protocol error: {error:?}");
 
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("{error:?}"),
-                    ));
+                    let encoded = encode_error(&error.to_string());
+
+                    stream.write_all(encoded.as_bytes())?;
+
+                    receive_buffer.clear();
+                    break;
                 }
             }
         }

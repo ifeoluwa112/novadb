@@ -1,5 +1,6 @@
 use crate::RespValue;
 use novadb_common::Command;
+use std::fmt;
 
 #[derive(Debug, PartialEq)]
 pub enum CommandError {
@@ -7,6 +8,20 @@ pub enum CommandError {
     EmptyArray,
     InvalidCommand,
     MissingArgument,
+}
+
+impl fmt::Display for CommandError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CommandError::NotAnArray => write!(f, "request must be an array"),
+
+            CommandError::EmptyArray => write!(f, "empty command"),
+
+            CommandError::InvalidCommand => write!(f, "invalid command"),
+
+            CommandError::MissingArgument => write!(f, "missing argument"),
+        }
+    }
 }
 
 pub fn parse_command(value: RespValue) -> Result<Command, CommandError> {
@@ -260,5 +275,18 @@ mod tests {
         let result = parse_command(resp);
 
         assert!(matches!(result, Err(CommandError::InvalidCommand)));
+    }
+
+    #[test]
+    fn displays_invalid_command_error() {
+        assert_eq!(CommandError::InvalidCommand.to_string(), "invalid command");
+    }
+
+    #[test]
+    fn displays_missing_argument_error() {
+        assert_eq!(
+            CommandError::MissingArgument.to_string(),
+            "missing argument"
+        );
     }
 }
