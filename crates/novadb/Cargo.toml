@@ -8,3 +8,4 @@ novadb-common = { path = "../novadb-common" }
 novadb-storage = { path = "../novadb-storage" }
 novadb-server = { path = "../novadb-server" }
 novadb-network = { path = "../novadb-network" }
+tokio = { version = "1", features = ["full"] }

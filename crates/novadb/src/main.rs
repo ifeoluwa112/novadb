@@ -3,8 +3,8 @@
 // use novadb_storage::Database;
 use novadb_network::run;
 
-
-fn main() -> std::io::Result<()> {
-    run()?;
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    run().await?;
     Ok(())
 }
