@@ -1,19 +1,20 @@
+use novadb_common::Command;
 use novadb_common::{encode_error, encode_response};
 use novadb_protocol::{parse_command, parse_resp};
-use novadb_server::execute;
+use novadb_server::{execute_read, execute_write};
 use novadb_storage::Database;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::RwLock;
 
 pub async fn run() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
 
     println!("NovaDB listening on 127.0.0.1:6379");
 
-    let database = Arc::new(Mutex::new(Database::new()));
+    let database = Arc::new(RwLock::new(Database::new()));
 
     loop {
         let (stream, address) = listener.accept().await?;
@@ -32,7 +33,7 @@ pub async fn run() -> std::io::Result<()> {
 
 async fn handle_client(
     mut stream: TcpStream,
-    database: Arc<Mutex<Database>>,
+    database: Arc<RwLock<Database>>,
 ) -> std::io::Result<()> {
     let mut read_buffer = [0u8; 1024];
 
@@ -57,10 +58,21 @@ async fn handle_client(
                         Ok(command) => {
                             println!("Parsed command: {command:?}");
 
-                            let response = {
-                                let mut db = database.lock().await;
+                            let response = match command {
+                                Command::Get { .. }
+                                | Command::Exists { .. }
+                                | Command::Keys
+                                | Command::Ttl { .. } => {
+                                    let db = database.read().await;
 
-                                execute(&mut db, command)
+                                    execute_read(&db, command)
+                                }
+
+                                Command::Set { .. } | Command::Delete { .. } => {
+                                    let mut db = database.write().await;
+
+                                    execute_write(&mut db, command)
+                                }
                             };
 
                             let encoded = encode_response(&response);

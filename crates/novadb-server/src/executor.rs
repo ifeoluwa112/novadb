@@ -3,7 +3,40 @@ use std::time::Duration;
 use novadb_common::{Command, Response};
 use novadb_storage::Database;
 
-pub fn execute(db: &mut Database, command: Command) -> Response {
+pub fn execute_read(db: &Database, command: Command) -> Response {
+    match command {
+        Command::Get { key } => match db.get(&key) {
+            Some(value) => Response::BulkString(value.to_string()),
+            None => Response::Null,
+        },
+
+        Command::Exists { key } => {
+            if db.exists(&key) {
+                Response::Integer(1)
+            } else {
+                Response::Integer(0)
+            }
+        }
+
+        Command::Keys => {
+            let keys: Vec<&String> = db.keys().collect();
+
+            let value = keys
+                .into_iter()
+                .cloned()
+                .collect::<Vec<String>>()
+                .join(" ");
+
+            Response::BulkString(value)
+        }
+
+        Command::Ttl { key } => Response::Integer(db.ttl(&key)),
+
+        _ => Response::SimpleString("ERR command is not a read command".to_string()),
+    }
+}
+
+pub fn execute_write(db: &mut Database, command: Command) -> Response {
     match command {
         Command::Set { key, value, ttl } => {
             match ttl {
@@ -18,40 +51,16 @@ pub fn execute(db: &mut Database, command: Command) -> Response {
 
             Response::SimpleString("OK".to_string())
         }
-        Command::Get { key } => match db.get(&key) {
-            Some(value) => Response::BulkString(value.to_string()),
-            None => Response::Null,
-        },
 
         Command::Delete { key } => {
-            let result = db.delete(&key);
-
-            if result.is_some() {
+            if db.delete(&key).is_some() {
                 Response::Integer(1)
             } else {
                 Response::Integer(0)
             }
         }
 
-        Command::Exists { key } => {
-            let exists = db.exists(&key);
-
-            if exists {
-                Response::Integer(1)
-            } else {
-                Response::Integer(0)
-            }
-        }
-
-        Command::Keys => {
-            let keys: Vec<&String> = db.keys().collect();
-
-            let value = keys.into_iter().cloned().collect::<Vec<String>>().join(" ");
-
-            Response::BulkString(value)
-        }
-
-        Command::Ttl { key } => Response::Integer(db.ttl(&key)),
+        _ => Response::SimpleString("ERR command is not a write command".to_string()),
     }
 }
 
@@ -64,7 +73,7 @@ mod tests {
     fn set_returns_ok() {
         let mut db = Database::new();
 
-        let response = execute(
+        let response = execute_write(
             &mut db,
             Command::Set {
                 key: "name".to_string(),
@@ -82,8 +91,8 @@ mod tests {
 
         db.set("name", "Precious");
 
-        let response = execute(
-            &mut db,
+        let response = execute_read(
+            &db,
             Command::Get {
                 key: "name".to_string(),
             },
@@ -94,10 +103,10 @@ mod tests {
 
     #[test]
     fn get_missing_key_returns_null() {
-        let mut db = Database::new();
+        let db = Database::new();
 
-        let response = execute(
-            &mut db,
+        let response = execute_read(
+            &db,
             Command::Get {
                 key: "missing".to_string(),
             },
@@ -112,8 +121,8 @@ mod tests {
 
         db.set("name", "Precious");
 
-        let response = execute(
-            &mut db,
+        let response = execute_read(
+            &db,
             Command::Exists {
                 key: "name".to_string(),
             },
@@ -124,10 +133,10 @@ mod tests {
 
     #[test]
     fn exists_returns_zero_for_missing_key() {
-        let mut db = Database::new();
+        let db = Database::new();
 
-        let response = execute(
-            &mut db,
+        let response = execute_read(
+            &db,
             Command::Exists {
                 key: "name".to_string(),
             },
@@ -141,8 +150,8 @@ mod tests {
         let mut db = Database::new();
         db.set("name", "Precious");
 
-        let response = execute(
-            &mut db,
+        let response = execute_read(
+            &db,
             Command::Ttl {
                 key: "name".to_string(),
             },
