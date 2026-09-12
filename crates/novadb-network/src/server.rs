@@ -5,6 +5,7 @@ use novadb_server::{execute_read, execute_write};
 use novadb_storage::Database;
 
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
@@ -63,15 +64,39 @@ async fn handle_client(
                                 | Command::Exists { .. }
                                 | Command::Keys
                                 | Command::Ttl { .. } => {
+                                    let lock_start = Instant::now();
+
                                     let db = database.read().await;
 
-                                    execute_read(&db, command)
+                                    let wait_time = lock_start.elapsed();
+
+                                    let execute_start = Instant::now();
+
+                                    let response = execute_read(&db, command);
+
+                                    let hold_time = execute_start.elapsed();
+
+                                    println!("READ  | wait={:?} | hold={:?}", wait_time, hold_time);
+
+                                    response
                                 }
 
                                 Command::Set { .. } | Command::Delete { .. } => {
+                                    let lock_start = Instant::now();
+
                                     let mut db = database.write().await;
 
-                                    execute_write(&mut db, command)
+                                    let wait_time = lock_start.elapsed();
+
+                                    let execute_start = Instant::now();
+
+                                    let response = execute_write(&mut db, command);
+
+                                    let hold_time = execute_start.elapsed();
+
+                                    println!("WRITE | wait={:?} | hold={:?}", wait_time, hold_time);
+
+                                    response
                                 }
                             };
 
