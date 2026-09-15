@@ -14,6 +14,27 @@ pub struct Measurement {
     pub latency: Duration,
 }
 
+#[derive(Debug, Default)]
+pub struct MeasurementCollector {
+    pub measurements: Vec<Measurement>,
+}
+
+impl MeasurementCollector {
+    pub fn new() -> Self {
+        Self {
+            measurements: Vec::new(),
+        }
+    }
+
+    pub fn record(&mut self, measurement: Measurement) {
+        self.measurements.push(measurement);
+    }
+
+    pub fn len(&self) -> usize {
+        self.measurements.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
