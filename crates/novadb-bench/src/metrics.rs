@@ -64,31 +64,21 @@ impl MeasurementCollector {
         percentile(&values, percent)
     }
 
-    pub fn statistics(&self) -> Option<Statistics> {
-        if self.measurements.is_empty() {
+    pub fn statistics(&self, metric: Metric) -> Option<Statistics> {
+        let values = self.metric_values(metric);
+        if values.is_empty() {
             return None;
         }
 
-        let min = self
-            .measurements
-            .iter()
-            .map(|measurement| measurement.wait)
-            .min()
-            .unwrap();
+        let min = values.iter().copied().min().unwrap();
 
-        let total: Duration = self
-            .measurements
-            .iter()
-            .map(|measurement| measurement.wait)
-            .sum();
+        let total: Duration = values.iter().sum();
 
-        let average = total / self.measurements.len() as u32;
+        let average = total / values.len() as u32;
 
-        let wait_times = self.metric_values(Metric::Wait);
-
-        let p50 = percentile(&wait_times, 0.50).unwrap();
-        let p95 = percentile(&wait_times, 0.95).unwrap();
-        let p99 = percentile(&wait_times, 0.99).unwrap();
+        let p50 = self.percentile(metric, 0.50).unwrap();
+        let p95 = self.percentile(metric, 0.95).unwrap();
+        let p99 = self.percentile(metric, 0.99).unwrap();
 
         Some(Statistics {
             min,
@@ -154,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn collector_calculates_min_and_average_wait() {
+    fn collector_calculates_statistics() {
         let mut collector = MeasurementCollector::new();
 
         collector.record(Measurement {
@@ -178,17 +168,20 @@ mod tests {
             latency: Duration::from_micros(40),
         });
 
-        let statistics = collector.statistics().unwrap();
+        let statistics = collector.statistics(Metric::Wait).unwrap();
 
         assert_eq!(statistics.min, Duration::from_micros(10));
         assert_eq!(statistics.average, Duration::from_micros(20));
+        assert_eq!(statistics.p50, Duration::from_micros(20));
+        assert_eq!(statistics.p95, Duration::from_micros(30));
+        assert_eq!(statistics.p99, Duration::from_micros(30));
     }
 
     #[test]
     fn empty_collector_has_no_statistics() {
         let collector = MeasurementCollector::new();
 
-        assert!(collector.statistics().is_none());
+        assert!(collector.statistics(Metric::Wait).is_none());
     }
 
     #[test]
