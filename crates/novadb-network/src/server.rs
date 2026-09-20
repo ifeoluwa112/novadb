@@ -1,14 +1,52 @@
-use novadb_common::Command;
+use novadb_common::{Command, Response};
 use novadb_common::{encode_error, encode_response};
 use novadb_protocol::{parse_command, parse_resp};
 use novadb_server::{execute_read, execute_write};
 use novadb_storage::Database;
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, Copy)]
+struct CommandTiming {
+    wait: Duration,
+    hold: Duration,
+}
+
+fn execute_read_with_timing(
+    db: &Database,
+    command: Command,
+    wait: Duration,
+) -> (Response, CommandTiming) {
+    let execute_start = Instant::now();
+
+    let response = execute_read(db, command);
+
+    let hold = execute_start.elapsed();
+
+    let timing = CommandTiming { wait, hold };
+
+    (response, timing)
+}
+
+fn execute_write_with_timing(
+    db: &mut Database,
+    command: Command,
+    wait: Duration,
+) -> (Response, CommandTiming) {
+    let execute_start = Instant::now();
+
+    let response = execute_write(db, command);
+
+    let hold = execute_start.elapsed();
+
+    let timing = CommandTiming { wait, hold };
+
+    (response, timing)
+}
 
 pub async fn run() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
@@ -59,44 +97,39 @@ async fn handle_client(
                         Ok(command) => {
                             println!("Parsed command: {command:?}");
 
-                            let response = match command {
+                            let (response, timing) = match command {
                                 Command::Get { .. }
                                 | Command::Exists { .. }
                                 | Command::Keys
                                 | Command::Ttl { .. } => {
                                     let lock_start = Instant::now();
-
                                     let db = database.read().await;
+                                    let wait = lock_start.elapsed();
 
-                                    let wait_time = lock_start.elapsed();
+                                    let (response, timing) =
+                                        execute_read_with_timing(&db, command, wait);
 
-                                    let execute_start = Instant::now();
-
-                                    let response = execute_read(&db, command);
-
-                                    let hold_time = execute_start.elapsed();
-
-                                    println!("READ  | wait={:?} | hold={:?}", wait_time, hold_time);
-
-                                    response
+                                    println!(
+                                        "READ  | wait={:?} | hold={:?}",
+                                        timing.wait, timing.hold
+                                    );
+                                    (response, timing)
                                 }
 
                                 Command::Set { .. } | Command::Delete { .. } => {
                                     let lock_start = Instant::now();
-
                                     let mut db = database.write().await;
+                                    let wait = lock_start.elapsed();
 
-                                    let wait_time = lock_start.elapsed();
+                                    let (response, timing) =
+                                        execute_write_with_timing(&mut db, command, wait);
 
-                                    let execute_start = Instant::now();
+                                    println!(
+                                        "WRITE | wait={:?} | hold={:?}",
+                                        timing.wait, timing.hold
+                                    );
 
-                                    let response = execute_write(&mut db, command);
-
-                                    let hold_time = execute_start.elapsed();
-
-                                    println!("WRITE | wait={:?} | hold={:?}", wait_time, hold_time);
-
-                                    response
+                                    (response, timing)
                                 }
                             };
 

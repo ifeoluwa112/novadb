@@ -6,15 +6,17 @@ pub enum Operation {
     Write,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Metric {
     Wait,
     Hold,
     Latency,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Statistics {
+    pub metric: Metric,
     pub min: Duration,
+    pub max: Duration,
     pub average: Duration,
     pub p50: Duration,
     pub p95: Duration,
@@ -65,23 +67,25 @@ impl MeasurementCollector {
     }
 
     pub fn statistics(&self, metric: Metric) -> Option<Statistics> {
-        let values = self.metric_values(metric);
-        if values.is_empty() {
+        if self.measurements.is_empty() {
             return None;
         }
-
+        let values = self.metric_values(metric);
         let min = values.iter().copied().min().unwrap();
+        let max = values.iter().copied().max().unwrap();
 
-        let total: Duration = values.iter().sum();
+        let total: Duration = values.iter().copied().sum();
 
         let average = total / values.len() as u32;
 
-        let p50 = self.percentile(metric, 0.50).unwrap();
-        let p95 = self.percentile(metric, 0.95).unwrap();
-        let p99 = self.percentile(metric, 0.99).unwrap();
+        let p50 = percentile(&values, 0.50).unwrap();
+        let p95 = percentile(&values, 0.95).unwrap();
+        let p99 = percentile(&values, 0.99).unwrap();
 
         Some(Statistics {
+            metric,
             min,
+            max,
             average,
             p50,
             p95,
@@ -112,6 +116,8 @@ pub fn percentile(values: &[Duration], percentile: f64) -> Option<Duration> {
 }
 #[cfg(test)]
 mod tests {
+
+    use std::assert_eq;
 
     use super::*;
 
@@ -175,6 +181,7 @@ mod tests {
         assert_eq!(statistics.p50, Duration::from_micros(20));
         assert_eq!(statistics.p95, Duration::from_micros(30));
         assert_eq!(statistics.p99, Duration::from_micros(30));
+        assert_eq!(statistics.metric, Metric::Wait);
     }
 
     #[test]
@@ -293,5 +300,28 @@ mod tests {
             collector.percentile(Metric::Wait, 0.99),
             Some(Duration::from_micros(50))
         );
+    }
+
+    #[test]
+    fn collector_calculates_statistics_for_hold_metric() {
+        let mut collector = MeasurementCollector::new();
+
+        for hold in [2, 4, 6, 8, 10] {
+            collector.record(Measurement {
+                operation: Operation::Read,
+                wait: Duration::from_micros(100),
+                hold: Duration::from_micros(hold),
+                latency: Duration::from_micros(200),
+            });
+        }
+
+        let statistics = collector.statistics(Metric::Hold).unwrap();
+
+        assert!(matches!(statistics.metric, Metric::Hold));
+        assert_eq!(statistics.min, Duration::from_micros(2));
+        assert_eq!(statistics.average, Duration::from_micros(6));
+        assert_eq!(statistics.p50, Duration::from_micros(6));
+        assert_eq!(statistics.p95, Duration::from_micros(10));
+        assert_eq!(statistics.p99, Duration::from_micros(10));
     }
 }

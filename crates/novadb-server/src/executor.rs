@@ -21,11 +21,7 @@ pub fn execute_read(db: &Database, command: Command) -> Response {
         Command::Keys => {
             let keys: Vec<&String> = db.keys().collect();
 
-            let value = keys
-                .into_iter()
-                .cloned()
-                .collect::<Vec<String>>()
-                .join(" ");
+            let value = keys.into_iter().cloned().collect::<Vec<String>>().join(" ");
 
             Response::BulkString(value)
         }
