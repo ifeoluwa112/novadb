@@ -1,4 +1,5 @@
-use novadb_common::{Command, Response};
+use novadb_common::Command;
+use novadb_common::Response;
 use novadb_common::{encode_error, encode_response};
 use novadb_protocol::{parse_command, parse_resp};
 use novadb_server::{execute_read, execute_write};
@@ -11,9 +12,45 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, Copy)]
+enum Operation {
+    Read,
+    Write,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct CommandTiming {
     wait: Duration,
     hold: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CollectedTiming {
+    _operation: Operation,
+    _timing: CommandTiming,
+}
+
+#[derive(Debug, Default)]
+struct ConnectionTimingCollector {
+    measurements: Vec<CollectedTiming>,
+}
+
+impl ConnectionTimingCollector {
+    fn new() -> Self {
+        Self {
+            measurements: Vec::new(),
+        }
+    }
+    fn record(&mut self, measurement: CollectedTiming) {
+        self.measurements.push(measurement);
+    }
+
+    fn len(&self) -> usize {
+        self.measurements.len()
+    }
+
+    fn finish(self) -> Vec<CollectedTiming> {
+        self.measurements
+    }
 }
 
 fn execute_read_with_timing(
@@ -40,7 +77,6 @@ fn execute_write_with_timing(
     let execute_start = Instant::now();
 
     let response = execute_write(db, command);
-
     let hold = execute_start.elapsed();
 
     let timing = CommandTiming { wait, hold };
@@ -74,6 +110,7 @@ async fn handle_client(
     mut stream: TcpStream,
     database: Arc<RwLock<Database>>,
 ) -> std::io::Result<()> {
+    let mut collector = ConnectionTimingCollector::new();
     let mut read_buffer = [0u8; 1024];
 
     let mut receive_buffer = Vec::new();
@@ -97,39 +134,47 @@ async fn handle_client(
                         Ok(command) => {
                             println!("Parsed command: {command:?}");
 
-                            let (response, timing) = match command {
+                            let response = match command {
                                 Command::Get { .. }
                                 | Command::Exists { .. }
                                 | Command::Keys
                                 | Command::Ttl { .. } => {
                                     let lock_start = Instant::now();
                                     let db = database.read().await;
-                                    let wait = lock_start.elapsed();
+                                    let wait_time = lock_start.elapsed();
 
                                     let (response, timing) =
-                                        execute_read_with_timing(&db, command, wait);
+                                        execute_read_with_timing(&db, command, wait_time);
+                                    collector.record(CollectedTiming {
+                                        _operation: Operation::Read,
+                                        _timing: timing,
+                                    });
 
                                     println!(
                                         "READ  | wait={:?} | hold={:?}",
                                         timing.wait, timing.hold
                                     );
-                                    (response, timing)
+                                    response
                                 }
 
                                 Command::Set { .. } | Command::Delete { .. } => {
                                     let lock_start = Instant::now();
                                     let mut db = database.write().await;
-                                    let wait = lock_start.elapsed();
-
+                                    let wait_time = lock_start.elapsed();
                                     let (response, timing) =
-                                        execute_write_with_timing(&mut db, command, wait);
+                                        execute_write_with_timing(&mut db, command, wait_time);
+
+                                    collector.record(CollectedTiming {
+                                        _operation: Operation::Write,
+                                        _timing: timing,
+                                    });
 
                                     println!(
                                         "WRITE | wait={:?} | hold={:?}",
                                         timing.wait, timing.hold
                                     );
 
-                                    (response, timing)
+                                    response
                                 }
                             };
 
