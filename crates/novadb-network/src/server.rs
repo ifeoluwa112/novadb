@@ -120,6 +120,11 @@ async fn handle_client(
 
         if bytes_read == 0 {
             println!("Client disconnected");
+
+            let measurements = collector.finish();
+
+            println!("Collected {} timing measurements", measurements.len());
+
             break;
         }
 
