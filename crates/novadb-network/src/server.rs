@@ -5,6 +5,7 @@ use novadb_protocol::{parse_command, parse_resp};
 use novadb_server::{execute_read, execute_write};
 use novadb_storage::Database;
 
+use std::println;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -25,8 +26,8 @@ struct CommandTiming {
 
 #[derive(Debug, Clone, Copy)]
 struct CollectedTiming {
-    _operation: Operation,
-    _timing: CommandTiming,
+    operation: Operation,
+    timing: CommandTiming,
 }
 
 #[derive(Debug, Default)]
@@ -44,7 +45,7 @@ impl ConnectionTimingCollector {
         self.measurements.push(measurement);
     }
 
-    fn len(&self) -> usize {
+    fn _len(&self) -> usize {
         self.measurements.len()
     }
 
@@ -112,18 +113,71 @@ async fn handle_client(
 ) -> std::io::Result<()> {
     let mut collector = ConnectionTimingCollector::new();
     let mut read_buffer = [0u8; 1024];
-
     let mut receive_buffer = Vec::new();
 
     loop {
         let bytes_read = stream.read(&mut read_buffer).await?;
-
         if bytes_read == 0 {
             println!("Client disconnected");
 
             let measurements = collector.finish();
 
-            println!("Collected {} timing measurements", measurements.len());
+            let mut read_count = 0;
+            let mut write_count = 0;
+
+            let mut read_wait_total = Duration::ZERO;
+            let mut write_wait_total = Duration::ZERO;
+
+            let mut read_hold_total = Duration::ZERO;
+            let mut write_hold_total = Duration::ZERO;
+
+            for measurement in &measurements {
+                match measurement.operation {
+                    Operation::Read => {
+                        read_count += 1;
+
+                        read_wait_total += measurement.timing.wait;
+                        read_hold_total += measurement.timing.hold;
+                    }
+
+                    Operation::Write => {
+                        write_count += 1;
+
+                        write_wait_total += measurement.timing.wait;
+                        write_hold_total += measurement.timing.hold;
+                    }
+                }
+            }
+
+            
+            println!(
+                "Connection summary | total={} | reads={} | writes={}",
+                measurements.len(),
+                read_count,
+                write_count,
+            );
+
+            println!(
+                "Read timing  | wait_total={:?} | hold_total={:?}",
+                read_wait_total, read_hold_total,
+            );
+
+            println!(
+                "Write timing | wait_total={:?} | hold_total={:?}",
+                write_wait_total, write_hold_total,
+            );
+
+            // println!(
+            //     "Read timing  | wait_avg={:?} | hold_avg={:?}",
+            //     read_wait_total / read_count as u32,
+            //     read_hold_total / read_count as u32,
+            // );
+
+            // println!(
+            //     "Write timing | wait_avg={:?} | hold_avg={:?}",
+            //     write_wait_total / write_count as u32,
+            //     write_hold_total / write_count as u32,
+            // );
 
             break;
         }
@@ -151,8 +205,8 @@ async fn handle_client(
                                     let (response, timing) =
                                         execute_read_with_timing(&db, command, wait_time);
                                     collector.record(CollectedTiming {
-                                        _operation: Operation::Read,
-                                        _timing: timing,
+                                        operation: Operation::Read,
+                                        timing: timing,
                                     });
 
                                     println!(
@@ -170,8 +224,8 @@ async fn handle_client(
                                         execute_write_with_timing(&mut db, command, wait_time);
 
                                     collector.record(CollectedTiming {
-                                        _operation: Operation::Write,
-                                        _timing: timing,
+                                        operation: Operation::Write,
+                                        timing: timing,
                                     });
 
                                     println!(
