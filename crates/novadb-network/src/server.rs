@@ -85,6 +85,70 @@ fn execute_write_with_timing(
     (response, timing)
 }
 
+fn average_duration(total: Duration, count: usize) -> Duration {
+    if count == 0 {
+        Duration::ZERO
+    } else {
+        total / count as u32
+    }
+}
+
+fn duration_min_max(values: &[Duration]) -> Option<(Duration, Duration)> {
+    let mut iter = values.iter().copied();
+
+    let first = iter.next()?;
+
+    let mut min = first;
+    let mut max = first;
+
+    for value in iter {
+        min = min.min(value);
+        max = max.max(value);
+    }
+
+    Some((min, max))
+}
+
+fn duration_percentile(values: &[Duration], percentile: f64) -> Option<Duration> {
+    if values.is_empty() {
+        return None;
+    }
+
+    assert!(
+        (0.0..=1.0).contains(&percentile),
+        "percentile must be between 0.0 and 1.0"
+    );
+
+    let mut sorted = values.to_vec();
+    sorted.sort_unstable();
+
+    let rank = (percentile * sorted.len() as f64).ceil() as usize;
+    let index = rank.saturating_sub(1);
+
+    sorted.get(index).copied()
+}
+
+fn print_duration_percentiles(label: &str, percentiles: DurationPercentiles) {
+    println!(
+        "{label} | p50={:?} | p95={:?} | p99={:?}",
+        percentiles.p50, percentiles.p95, percentiles.p99,
+    );
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DurationPercentiles {
+    p50: Option<Duration>,
+    p95: Option<Duration>,
+    p99: Option<Duration>,
+}
+
+fn duration_percentiles(values: &[Duration]) -> DurationPercentiles {
+    DurationPercentiles {
+        p50: duration_percentile(values, 0.50),
+        p95: duration_percentile(values, 0.95),
+        p99: duration_percentile(values, 0.99),
+    }
+}
+
 pub async fn run() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
 
@@ -131,6 +195,11 @@ async fn handle_client(
             let mut read_hold_total = Duration::ZERO;
             let mut write_hold_total = Duration::ZERO;
 
+            let mut read_wait_values = Vec::new();
+            let mut read_hold_values = Vec::new();
+            let mut write_wait_values = Vec::new();
+            let mut write_hold_values = Vec::new();
+
             for measurement in &measurements {
                 match measurement.operation {
                     Operation::Read => {
@@ -138,6 +207,8 @@ async fn handle_client(
 
                         read_wait_total += measurement.timing.wait;
                         read_hold_total += measurement.timing.hold;
+                        read_wait_values.push(measurement.timing.wait);
+                        read_hold_values.push(measurement.timing.hold);
                     }
 
                     Operation::Write => {
@@ -145,11 +216,29 @@ async fn handle_client(
 
                         write_wait_total += measurement.timing.wait;
                         write_hold_total += measurement.timing.hold;
+                        write_wait_values.push(measurement.timing.wait);
+                        write_hold_values.push(measurement.timing.hold);
                     }
                 }
             }
 
-            
+            let read_wait_average = average_duration(read_wait_total, read_count);
+            let read_hold_average = average_duration(read_hold_total, read_count);
+
+            let write_wait_average = average_duration(write_wait_total, write_count);
+            let write_hold_average = average_duration(write_hold_total, write_count);
+
+            let read_wait_min_max = duration_min_max(&read_wait_values);
+            let read_hold_min_max = duration_min_max(&read_hold_values);
+
+            let write_wait_min_max = duration_min_max(&write_wait_values);
+            let write_hold_min_max = duration_min_max(&write_hold_values);
+
+            let read_wait_percentiles = duration_percentiles(&read_wait_values);
+            let read_hold_percentiles = duration_percentiles(&read_hold_values);
+            let write_wait_percentiles = duration_percentiles(&write_wait_values);
+            let write_hold_percentiles = duration_percentiles(&write_hold_values);
+
             println!(
                 "Connection summary | total={} | reads={} | writes={}",
                 measurements.len(),
@@ -163,21 +252,33 @@ async fn handle_client(
             );
 
             println!(
+                "Read average | wait={:?} | hold={:?}",
+                read_wait_average, read_hold_average,
+            );
+
+            println!(
                 "Write timing | wait_total={:?} | hold_total={:?}",
                 write_wait_total, write_hold_total,
             );
 
-            // println!(
-            //     "Read timing  | wait_avg={:?} | hold_avg={:?}",
-            //     read_wait_total / read_count as u32,
-            //     read_hold_total / read_count as u32,
-            // );
+            println!(
+                "Write average | wait={:?} | hold={:?}",
+                write_wait_average, write_hold_average,
+            );
 
-            // println!(
-            //     "Write timing | wait_avg={:?} | hold_avg={:?}",
-            //     write_wait_total / write_count as u32,
-            //     write_hold_total / write_count as u32,
-            // );
+            println!("Read wait min/max: {read_wait_min_max:?}");
+            println!("Read hold min/max: {read_hold_min_max:?}");
+
+            println!("Write wait min/max: {write_wait_min_max:?}");
+            println!("Write hold min/max: {write_hold_min_max:?}");
+            
+            print_duration_percentiles("Read wait percentiles", read_wait_percentiles);
+
+            print_duration_percentiles("Write wait percentiles", write_wait_percentiles);
+
+            print_duration_percentiles("Read hold percentiles", read_hold_percentiles);
+
+            print_duration_percentiles("Write hold percentiles", write_hold_percentiles);
 
             break;
         }
@@ -275,4 +376,89 @@ async fn handle_client(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn percentile_returns_none_for_empty_values() {
+        let values: Vec<Duration> = Vec::new();
+
+        assert_eq!(duration_percentile(&values, 0.50), None);
+    }
+
+    #[test]
+    fn percentile_uses_nearest_rank() {
+        let values = vec![
+            Duration::from_millis(8),
+            Duration::from_millis(2),
+            Duration::from_millis(12),
+            Duration::from_millis(5),
+            Duration::from_millis(3),
+        ];
+
+        assert_eq!(
+            duration_percentile(&values, 0.50),
+            Some(Duration::from_millis(5))
+        );
+
+        assert_eq!(
+            duration_percentile(&values, 0.95),
+            Some(Duration::from_millis(12))
+        );
+    }
+
+    #[test]
+    fn percentile_does_not_modify_original_values() {
+        let values = vec![
+            Duration::from_millis(8),
+            Duration::from_millis(2),
+            Duration::from_millis(5),
+        ];
+
+        let original = values.clone();
+
+        let _ = duration_percentile(&values, 0.50);
+
+        assert_eq!(values, original);
+    }
+
+    #[test]
+    fn percentiles_return_expected_values() {
+        let values = vec![
+            Duration::from_millis(8),
+            Duration::from_millis(2),
+            Duration::from_millis(12),
+            Duration::from_millis(5),
+            Duration::from_millis(3),
+        ];
+
+        let percentiles = duration_percentiles(&values);
+
+        assert_eq!(
+            percentiles,
+            DurationPercentiles {
+                p50: Some(Duration::from_millis(5)),
+                p95: Some(Duration::from_millis(12)),
+                p99: Some(Duration::from_millis(12)),
+            }
+        );
+    }
+
+    #[test]
+    fn percentiles_return_none_for_empty_values() {
+        let values: Vec<Duration> = Vec::new();
+
+        assert_eq!(
+            duration_percentiles(&values),
+            DurationPercentiles {
+                p50: None,
+                p95: None,
+                p99: None,
+            }
+        );
+    }
 }
