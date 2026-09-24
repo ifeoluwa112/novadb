@@ -324,4 +324,28 @@ mod tests {
         assert_eq!(statistics.p95, Duration::from_micros(10));
         assert_eq!(statistics.p99, Duration::from_micros(10));
     }
+
+    #[test]
+    fn collector_calculates_statistics_for_latency_metric() {
+        let mut collector = MeasurementCollector::new();
+
+        for latency in [20, 40, 60, 80, 100] {
+            collector.record(Measurement {
+                operation: Operation::Read,
+                wait: Duration::from_micros(10),
+                hold: Duration::from_micros(5),
+                latency: Duration::from_micros(latency),
+            });
+        }
+
+        let statistics = collector.statistics(Metric::Latency).unwrap();
+
+        assert_eq!(statistics.metric, Metric::Latency);
+        assert_eq!(statistics.min, Duration::from_micros(20));
+        assert_eq!(statistics.max, Duration::from_micros(100));
+        assert_eq!(statistics.average, Duration::from_micros(60));
+        assert_eq!(statistics.p50, Duration::from_micros(60));
+        assert_eq!(statistics.p95, Duration::from_micros(100));
+        assert_eq!(statistics.p99, Duration::from_micros(100));
+    }
 }

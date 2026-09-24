@@ -22,6 +22,21 @@ enum Operation {
 struct CommandTiming {
     wait: Duration,
     hold: Duration,
+    latency: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PendingCommandTiming {
+    wait: Duration,
+    hold: Duration,
+    latency_start: Instant,
+}
+
+#[derive(Debug)]
+struct PendingCommand {
+    response: Response,
+    operation: Operation,
+    timing: PendingCommandTiming,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -58,14 +73,19 @@ fn execute_read_with_timing(
     db: &Database,
     command: Command,
     wait: Duration,
-) -> (Response, CommandTiming) {
+    latency_start: Instant,
+) -> (Response, PendingCommandTiming) {
     let execute_start = Instant::now();
 
     let response = execute_read(db, command);
 
     let hold = execute_start.elapsed();
 
-    let timing = CommandTiming { wait, hold };
+    let timing = PendingCommandTiming {
+        wait,
+        hold,
+        latency_start,
+    };
 
     (response, timing)
 }
@@ -74,13 +94,19 @@ fn execute_write_with_timing(
     db: &mut Database,
     command: Command,
     wait: Duration,
-) -> (Response, CommandTiming) {
+    latency_start: Instant,
+) -> (Response, PendingCommandTiming) {
     let execute_start = Instant::now();
 
     let response = execute_write(db, command);
+
     let hold = execute_start.elapsed();
 
-    let timing = CommandTiming { wait, hold };
+    let timing = PendingCommandTiming {
+        wait,
+        hold,
+        latency_start,
+    };
 
     (response, timing)
 }
@@ -194,11 +220,15 @@ async fn handle_client(
 
             let mut read_hold_total = Duration::ZERO;
             let mut write_hold_total = Duration::ZERO;
+            let mut read_latency_total = Duration::ZERO;
+            let mut write_latency_total = Duration::ZERO;
 
             let mut read_wait_values = Vec::new();
             let mut read_hold_values = Vec::new();
             let mut write_wait_values = Vec::new();
             let mut write_hold_values = Vec::new();
+            let mut read_latency_values = Vec::new();
+            let mut write_latency_values = Vec::new();
 
             for measurement in &measurements {
                 match measurement.operation {
@@ -207,8 +237,10 @@ async fn handle_client(
 
                         read_wait_total += measurement.timing.wait;
                         read_hold_total += measurement.timing.hold;
+                        read_latency_total += measurement.timing.latency;
                         read_wait_values.push(measurement.timing.wait);
                         read_hold_values.push(measurement.timing.hold);
+                        read_latency_values.push(measurement.timing.latency);
                     }
 
                     Operation::Write => {
@@ -216,23 +248,29 @@ async fn handle_client(
 
                         write_wait_total += measurement.timing.wait;
                         write_hold_total += measurement.timing.hold;
+                        write_latency_total += measurement.timing.latency;
                         write_wait_values.push(measurement.timing.wait);
                         write_hold_values.push(measurement.timing.hold);
+                        write_latency_values.push(measurement.timing.latency);
                     }
                 }
             }
 
             let read_wait_average = average_duration(read_wait_total, read_count);
             let read_hold_average = average_duration(read_hold_total, read_count);
+            let read_latency_average = average_duration(read_latency_total, read_count);
 
             let write_wait_average = average_duration(write_wait_total, write_count);
             let write_hold_average = average_duration(write_hold_total, write_count);
+            let write_latency_average = average_duration(write_latency_total, write_count);
 
             let read_wait_min_max = duration_min_max(&read_wait_values);
             let read_hold_min_max = duration_min_max(&read_hold_values);
+            let read_latency_min_max = duration_min_max(&read_latency_values);
 
             let write_wait_min_max = duration_min_max(&write_wait_values);
             let write_hold_min_max = duration_min_max(&write_hold_values);
+            let write_latency_min_max = duration_min_max(&write_latency_values);
 
             let read_wait_percentiles = duration_percentiles(&read_wait_values);
             let read_hold_percentiles = duration_percentiles(&read_hold_values);
@@ -247,23 +285,23 @@ async fn handle_client(
             );
 
             println!(
-                "Read timing  | wait_total={:?} | hold_total={:?}",
-                read_wait_total, read_hold_total,
+                "Read timing  | wait_total={:?} | hold_total={:?} | latency_total={:?}",
+                read_wait_total, read_hold_total, read_latency_total,
             );
 
             println!(
-                "Read average | wait={:?} | hold={:?}",
-                read_wait_average, read_hold_average,
+                "Read average | wait={:?} | hold={:?} | latency={:?}",
+                read_wait_average, read_hold_average, read_latency_average,
             );
 
             println!(
-                "Write timing | wait_total={:?} | hold_total={:?}",
-                write_wait_total, write_hold_total,
+                "Write timing | wait_total={:?} | hold_total={:?} | latency_total={:?}",
+                write_wait_total, write_hold_total, write_latency_total,
             );
 
             println!(
-                "Write average | wait={:?} | hold={:?}",
-                write_wait_average, write_hold_average,
+                "Write average | wait={:?} | hold={:?} | latency={:?}",
+                write_wait_average, write_hold_average, write_latency_average,
             );
 
             println!("Read wait min/max: {read_wait_min_max:?}");
@@ -271,7 +309,7 @@ async fn handle_client(
 
             println!("Write wait min/max: {write_wait_min_max:?}");
             println!("Write hold min/max: {write_hold_min_max:?}");
-            
+
             print_duration_percentiles("Read wait percentiles", read_wait_percentiles);
 
             print_duration_percentiles("Write wait percentiles", write_wait_percentiles);
@@ -294,55 +332,91 @@ async fn handle_client(
                         Ok(command) => {
                             println!("Parsed command: {command:?}");
 
-                            let response = match command {
+                            let pending = match command {
                                 Command::Get { .. }
                                 | Command::Exists { .. }
                                 | Command::Keys
                                 | Command::Ttl { .. } => {
+                                    let latency_start = Instant::now();
+
                                     let lock_start = Instant::now();
                                     let db = database.read().await;
                                     let wait_time = lock_start.elapsed();
 
-                                    let (response, timing) =
-                                        execute_read_with_timing(&db, command, wait_time);
-                                    collector.record(CollectedTiming {
-                                        operation: Operation::Read,
-                                        timing: timing,
-                                    });
-
+                                    let (response, timing) = execute_read_with_timing(
+                                        &db,
+                                        command,
+                                        wait_time,
+                                        latency_start,
+                                    );
+                                    // collector.record(CollectedTiming {
+                                    //     operation: Operation::Read,
+                                    //     timing: timing,
+                                    // });
                                     println!(
                                         "READ  | wait={:?} | hold={:?}",
                                         timing.wait, timing.hold
                                     );
-                                    response
+
+                                    PendingCommand {
+                                        response,
+                                        operation: Operation::Read,
+                                        timing,
+                                    }
                                 }
 
                                 Command::Set { .. } | Command::Delete { .. } => {
+                                    let latency_start = Instant::now();
                                     let lock_start = Instant::now();
                                     let mut db = database.write().await;
                                     let wait_time = lock_start.elapsed();
-                                    let (response, timing) =
-                                        execute_write_with_timing(&mut db, command, wait_time);
+                                    let (response, timing) = execute_write_with_timing(
+                                        &mut db,
+                                        command,
+                                        wait_time,
+                                        latency_start,
+                                    );
 
-                                    collector.record(CollectedTiming {
-                                        operation: Operation::Write,
-                                        timing: timing,
-                                    });
-
+                                    // collector.record(CollectedTiming {
+                                    //     operation: Operation::Write,
+                                    //     timing: timing,
+                                    // });
                                     println!(
                                         "WRITE | wait={:?} | hold={:?}",
                                         timing.wait, timing.hold
                                     );
 
-                                    response
+                                    PendingCommand {
+                                        response,
+                                        operation: Operation::Write,
+                                        timing,
+                                    }
                                 }
                             };
 
-                            let encoded = encode_response(&response);
+                            let encoded = encode_response(&pending.response);
 
                             println!("Encoded response: {encoded:?}");
 
                             stream.write_all(encoded.as_bytes()).await?;
+
+                            let latency = pending.timing.latency_start.elapsed();
+
+                            let timing = CommandTiming {
+                                wait: pending.timing.wait,
+                                hold: pending.timing.hold,
+                                latency,
+                            };
+
+                            collector.record(CollectedTiming {
+                                operation: pending.operation,
+                                timing,
+                            });
+
+                            println!(
+                                "COMPLETED | operation={:?} | wait={:?} | hold={:?} | latency={:?}",
+                                pending.operation, timing.wait, timing.hold, timing.latency,
+                            );
                         }
 
                         Err(error) => {
