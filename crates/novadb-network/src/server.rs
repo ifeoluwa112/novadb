@@ -6,7 +6,10 @@ use novadb_server::{execute_read, execute_write};
 use novadb_storage::Database;
 
 use std::println;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -45,6 +48,45 @@ struct CollectedTiming {
     timing: CommandTiming,
 }
 
+#[derive(Debug)]
+struct ConnectionSummary {
+    total: usize,
+    total_connections: usize,
+    read_count: usize,
+    write_count: usize,
+
+    read_wait_total: Duration,
+    read_hold_total: Duration,
+    read_latency_total: Duration,
+
+    write_wait_total: Duration,
+    write_hold_total: Duration,
+    write_latency_total: Duration,
+
+    read_wait_average: Duration,
+    read_hold_average: Duration,
+    read_latency_average: Duration,
+
+    write_wait_average: Duration,
+    write_hold_average: Duration,
+    write_latency_average: Duration,
+
+    read_wait_min_max: Option<(Duration, Duration)>,
+    read_hold_min_max: Option<(Duration, Duration)>,
+    read_latency_min_max: Option<(Duration, Duration)>,
+
+    write_wait_min_max: Option<(Duration, Duration)>,
+    write_hold_min_max: Option<(Duration, Duration)>,
+    write_latency_min_max: Option<(Duration, Duration)>,
+
+    read_wait_percentiles: DurationPercentiles,
+    read_hold_percentiles: DurationPercentiles,
+    read_latency_percentiles: DurationPercentiles,
+
+    write_wait_percentiles: DurationPercentiles,
+    write_hold_percentiles: DurationPercentiles,
+    write_latency_percentiles: DurationPercentiles,
+}
 #[derive(Debug, Default)]
 struct ConnectionTimingCollector {
     measurements: Vec<CollectedTiming>,
@@ -160,6 +202,121 @@ fn print_duration_percentiles(label: &str, percentiles: DurationPercentiles) {
         percentiles.p50, percentiles.p95, percentiles.p99,
     );
 }
+
+fn summarize_connection(
+    measurements: &[CollectedTiming],
+    total_connections: usize,
+) -> ConnectionSummary {
+    let mut read_count = 0;
+    let mut write_count = 0;
+
+    let mut read_wait_total = Duration::ZERO;
+    let mut write_wait_total = Duration::ZERO;
+
+    let mut read_hold_total = Duration::ZERO;
+    let mut write_hold_total = Duration::ZERO;
+
+    let mut read_latency_total = Duration::ZERO;
+    let mut write_latency_total = Duration::ZERO;
+
+    let mut read_wait_values = Vec::new();
+    let mut read_hold_values = Vec::new();
+    let mut write_wait_values = Vec::new();
+    let mut write_hold_values = Vec::new();
+    let mut read_latency_values = Vec::new();
+    let mut write_latency_values = Vec::new();
+
+    for measurement in measurements {
+        match measurement.operation {
+            Operation::Read => {
+                read_count += 1;
+
+                read_wait_total += measurement.timing.wait;
+                read_hold_total += measurement.timing.hold;
+                read_latency_total += measurement.timing.latency;
+
+                read_wait_values.push(measurement.timing.wait);
+                read_hold_values.push(measurement.timing.hold);
+                read_latency_values.push(measurement.timing.latency);
+            }
+
+            Operation::Write => {
+                write_count += 1;
+
+                write_wait_total += measurement.timing.wait;
+                write_hold_total += measurement.timing.hold;
+                write_latency_total += measurement.timing.latency;
+
+                write_wait_values.push(measurement.timing.wait);
+                write_hold_values.push(measurement.timing.hold);
+                write_latency_values.push(measurement.timing.latency);
+            }
+        }
+    }
+
+    let read_wait_average = average_duration(read_wait_total, read_count);
+    let read_hold_average = average_duration(read_hold_total, read_count);
+    let read_latency_average = average_duration(read_latency_total, read_count);
+
+    let write_wait_average = average_duration(write_wait_total, write_count);
+    let write_hold_average = average_duration(write_hold_total, write_count);
+    let write_latency_average = average_duration(write_latency_total, write_count);
+
+    let read_wait_min_max = duration_min_max(&read_wait_values);
+    let read_hold_min_max = duration_min_max(&read_hold_values);
+    let read_latency_min_max = duration_min_max(&read_latency_values);
+
+    let write_wait_min_max = duration_min_max(&write_wait_values);
+    let write_hold_min_max = duration_min_max(&write_hold_values);
+    let write_latency_min_max = duration_min_max(&write_latency_values);
+
+    let read_wait_percentiles = duration_percentiles(&read_wait_values);
+    let read_hold_percentiles = duration_percentiles(&read_hold_values);
+    let read_latency_percentiles = duration_percentiles(&read_latency_values);
+
+    let write_wait_percentiles = duration_percentiles(&write_wait_values);
+    let write_hold_percentiles = duration_percentiles(&write_hold_values);
+    let write_latency_percentiles = duration_percentiles(&write_latency_values);
+
+    ConnectionSummary {
+        total: measurements.len(),
+        total_connections,
+        read_count,
+        write_count,
+
+        read_wait_total,
+        read_hold_total,
+        read_latency_total,
+
+        write_wait_total,
+        write_hold_total,
+        write_latency_total,
+
+        read_wait_average,
+        read_hold_average,
+        read_latency_average,
+
+        write_wait_average,
+        write_hold_average,
+        write_latency_average,
+
+        read_wait_min_max,
+        read_hold_min_max,
+        read_latency_min_max,
+
+        write_wait_min_max,
+        write_hold_min_max,
+        write_latency_min_max,
+
+        read_wait_percentiles,
+        read_hold_percentiles,
+        read_latency_percentiles,
+
+        write_wait_percentiles,
+        write_hold_percentiles,
+        write_latency_percentiles,
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DurationPercentiles {
     p50: Option<Duration>,
@@ -181,18 +338,32 @@ pub async fn run() -> std::io::Result<()> {
     println!("NovaDB listening on 127.0.0.1:6379");
 
     let database = Arc::new(RwLock::new(Database::new()));
+    let active_connections = Arc::new(AtomicUsize::new(0));
+    let total_connections = Arc::new(AtomicUsize::new(0));
 
     loop {
         let (stream, address) = listener.accept().await?;
 
-        println!("Client connected: {address}");
+        let current_active = active_connections.fetch_add(1, Ordering::Relaxed) + 1;
+
+        let total_accepted = total_connections.fetch_add(1, Ordering::Relaxed) + 1;
+
+        println!(
+            "Client connected: {address} | active={} | total_accepted={}",
+            current_active, total_accepted,
+        );
 
         let database = Arc::clone(&database);
-
+        let active_connections = Arc::clone(&active_connections);
+        let total_connections = Arc::clone(&total_connections);
         tokio::spawn(async move {
-            if let Err(error) = handle_client(stream, database).await {
+            if let Err(error) = handle_client(stream, database, total_connections).await {
                 println!("Client error: {error}");
             }
+
+            let active = active_connections.fetch_sub(1, Ordering::Relaxed) - 1;
+
+            println!("Client disconnected | active={}", active,);
         });
     }
 }
@@ -200,6 +371,7 @@ pub async fn run() -> std::io::Result<()> {
 async fn handle_client(
     mut stream: TcpStream,
     database: Arc<RwLock<Database>>,
+    total_connections: Arc<AtomicUsize>,
 ) -> std::io::Result<()> {
     let mut collector = ConnectionTimingCollector::new();
     let mut read_buffer = [0u8; 1024];
@@ -211,120 +383,59 @@ async fn handle_client(
             println!("Client disconnected");
 
             let measurements = collector.finish();
+            let accepted_clients = total_connections.load(Ordering::Relaxed);
 
-            let mut read_count = 0;
-            let mut write_count = 0;
-
-            let mut read_wait_total = Duration::ZERO;
-            let mut write_wait_total = Duration::ZERO;
-
-            let mut read_hold_total = Duration::ZERO;
-            let mut write_hold_total = Duration::ZERO;
-            let mut read_latency_total = Duration::ZERO;
-            let mut write_latency_total = Duration::ZERO;
-
-            let mut read_wait_values = Vec::new();
-            let mut read_hold_values = Vec::new();
-            let mut write_wait_values = Vec::new();
-            let mut write_hold_values = Vec::new();
-            let mut read_latency_values = Vec::new();
-            let mut write_latency_values = Vec::new();
-
-            for measurement in &measurements {
-                match measurement.operation {
-                    Operation::Read => {
-                        read_count += 1;
-
-                        read_wait_total += measurement.timing.wait;
-                        read_hold_total += measurement.timing.hold;
-                        read_latency_total += measurement.timing.latency;
-                        read_wait_values.push(measurement.timing.wait);
-                        read_hold_values.push(measurement.timing.hold);
-                        read_latency_values.push(measurement.timing.latency);
-                    }
-
-                    Operation::Write => {
-                        write_count += 1;
-
-                        write_wait_total += measurement.timing.wait;
-                        write_hold_total += measurement.timing.hold;
-                        write_latency_total += measurement.timing.latency;
-                        write_wait_values.push(measurement.timing.wait);
-                        write_hold_values.push(measurement.timing.hold);
-                        write_latency_values.push(measurement.timing.latency);
-                    }
-                }
-            }
-
-            let read_wait_average = average_duration(read_wait_total, read_count);
-            let read_hold_average = average_duration(read_hold_total, read_count);
-            let read_latency_average = average_duration(read_latency_total, read_count);
-
-            let write_wait_average = average_duration(write_wait_total, write_count);
-            let write_hold_average = average_duration(write_hold_total, write_count);
-            let write_latency_average = average_duration(write_latency_total, write_count);
-
-            let read_wait_min_max = duration_min_max(&read_wait_values);
-            let read_hold_min_max = duration_min_max(&read_hold_values);
-            let read_latency_min_max = duration_min_max(&read_latency_values);
-
-            let write_wait_min_max = duration_min_max(&write_wait_values);
-            let write_hold_min_max = duration_min_max(&write_hold_values);
-            let write_latency_min_max = duration_min_max(&write_latency_values);
-
-            let read_wait_percentiles = duration_percentiles(&read_wait_values);
-            let read_hold_percentiles = duration_percentiles(&read_hold_values);
-            let read_latency_percentiles = duration_percentiles(&read_latency_values);
-            let write_wait_percentiles = duration_percentiles(&write_wait_values);
-            let write_hold_percentiles = duration_percentiles(&write_hold_values);
-            let write_latency_percentiles = duration_percentiles(&write_latency_values);
-
+            let summary = summarize_connection(&measurements, accepted_clients);
             println!(
-                "Connection summary | total={} | reads={} | writes={}",
-                measurements.len(),
-                read_count,
-                write_count,
+                "Connection summary | total_connections={} | total_commands={} | reads={} | writes={}",
+                summary.total_connections, summary.total, summary.read_count, summary.write_count,
             );
-
             println!(
                 "Read timing  | wait_total={:?} | hold_total={:?} | latency_total={:?}",
-                read_wait_total, read_hold_total, read_latency_total,
+                summary.read_wait_total, summary.read_hold_total, summary.read_latency_total,
             );
 
             println!(
                 "Read average | wait={:?} | hold={:?} | latency={:?}",
-                read_wait_average, read_hold_average, read_latency_average,
+                summary.read_wait_average, summary.read_hold_average, summary.read_latency_average,
             );
-
             println!(
                 "Write timing | wait_total={:?} | hold_total={:?} | latency_total={:?}",
-                write_wait_total, write_hold_total, write_latency_total,
+                summary.write_wait_total, summary.write_hold_total, summary.write_latency_total,
             );
 
             println!(
                 "Write average | wait={:?} | hold={:?} | latency={:?}",
-                write_wait_average, write_hold_average, write_latency_average,
+                summary.write_wait_average,
+                summary.write_hold_average,
+                summary.write_latency_average,
             );
 
-            println!("Read wait min/max: {read_wait_min_max:?}");
-            println!("Read hold min/max: {read_hold_min_max:?}");
-            println!("Read latency min/max: {:?}", read_latency_min_max);
+            println!("Read wait min/max: {:?}", summary.read_wait_min_max);
+            println!("Read hold min/max: {:?}", summary.read_hold_min_max);
+            println!("Read latency min/max: {:?}", summary.read_latency_min_max);
 
-            println!("Write wait min/max: {write_wait_min_max:?}");
-            println!("Write hold min/max: {write_hold_min_max:?}");
-            println!("Write latency min/max: {:?}", write_latency_min_max);
+            println!("Write wait min/max: {:?}", summary.write_wait_min_max);
+            println!("Write hold min/max: {:?}", summary.write_hold_min_max);
+            println!("Write latency min/max: {:?}", summary.write_latency_min_max);
 
-            print_duration_percentiles("Read wait percentiles", read_wait_percentiles);
+            print_duration_percentiles("Read wait percentiles", summary.read_wait_percentiles);
 
-            print_duration_percentiles("Write wait percentiles", write_wait_percentiles);
+            print_duration_percentiles("Write wait percentiles", summary.write_wait_percentiles);
 
-            print_duration_percentiles("Read hold percentiles", read_hold_percentiles);
+            print_duration_percentiles("Read hold percentiles", summary.read_hold_percentiles);
 
-            print_duration_percentiles("Write hold percentiles", write_hold_percentiles);
+            print_duration_percentiles("Write hold percentiles", summary.write_hold_percentiles);
 
-            print_duration_percentiles("Read latency percentiles", read_latency_percentiles);
+            print_duration_percentiles(
+                "Read latency percentiles",
+                summary.read_latency_percentiles,
+            );
 
-            print_duration_percentiles("Write latency percentiles", write_latency_percentiles);
+            print_duration_percentiles(
+                "Write latency percentiles",
+                summary.write_latency_percentiles,
+            );
 
             break;
         }
@@ -346,7 +457,6 @@ async fn handle_client(
                                 | Command::Keys
                                 | Command::Ttl { .. } => {
                                     let latency_start = Instant::now();
-
                                     let lock_start = Instant::now();
                                     let db = database.read().await;
                                     let wait_time = lock_start.elapsed();
@@ -357,10 +467,6 @@ async fn handle_client(
                                         wait_time,
                                         latency_start,
                                     );
-                                    // collector.record(CollectedTiming {
-                                    //     operation: Operation::Read,
-                                    //     timing: timing,
-                                    // });
                                     println!(
                                         "READ  | wait={:?} | hold={:?}",
                                         timing.wait, timing.hold
@@ -384,11 +490,6 @@ async fn handle_client(
                                         wait_time,
                                         latency_start,
                                     );
-
-                                    // collector.record(CollectedTiming {
-                                    //     operation: Operation::Write,
-                                    //     timing: timing,
-                                    // });
                                     println!(
                                         "WRITE | wait={:?} | hold={:?}",
                                         timing.wait, timing.hold
@@ -463,7 +564,7 @@ async fn handle_client(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use std::{assert_eq, time::Duration};
 
     #[test]
     fn percentile_returns_none_for_empty_values() {
@@ -541,6 +642,61 @@ mod tests {
                 p95: None,
                 p99: None,
             }
+        );
+    }
+
+    #[test]
+    fn validates_masurements_summary() {
+        let mut collector = ConnectionTimingCollector::new();
+
+        collector.record(CollectedTiming {
+            operation: Operation::Read,
+            timing: CommandTiming {
+                wait: Duration::from_micros(10),
+                hold: Duration::from_micros(2),
+                latency: Duration::from_micros(20),
+            },
+        });
+        collector.record(CollectedTiming {
+            operation: Operation::Read,
+            timing: CommandTiming {
+                wait: Duration::from_micros(10),
+                hold: Duration::from_micros(2),
+                latency: Duration::from_micros(20),
+            },
+        });
+        collector.record(CollectedTiming {
+            operation: Operation::Write,
+            timing: CommandTiming {
+                wait: Duration::from_micros(10),
+                hold: Duration::from_micros(2),
+                latency: Duration::from_micros(20),
+            },
+        });
+
+        let measurements = collector.finish();
+
+        let summary = summarize_connection(&measurements, 42);
+
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.total_connections, 42);
+        assert_eq!(summary.read_count, 2);
+        assert_eq!(summary.write_count, 1);
+        assert_eq!(summary.read_wait_total, Duration::from_micros(20));
+        assert_eq!(summary.write_latency_total, Duration::from_micros(20));
+        assert_eq!(summary.read_wait_average, Duration::from_micros(10));
+        assert_eq!(summary.write_hold_average, Duration::from_micros(2));
+        assert_eq!(
+            summary.read_latency_min_max,
+            Some((Duration::from_micros(20), Duration::from_micros(20)))
+        );
+        assert_eq!(
+            summary.write_latency_min_max,
+            Some((Duration::from_micros(20), Duration::from_micros(20)))
+        );
+        assert_eq!(
+            summary.read_wait_percentiles.p50,
+            Some(Duration::from_micros(10))
         );
     }
 }
