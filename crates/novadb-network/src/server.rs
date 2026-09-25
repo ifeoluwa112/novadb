@@ -274,8 +274,10 @@ async fn handle_client(
 
             let read_wait_percentiles = duration_percentiles(&read_wait_values);
             let read_hold_percentiles = duration_percentiles(&read_hold_values);
+            let read_latency_percentiles = duration_percentiles(&read_latency_values);
             let write_wait_percentiles = duration_percentiles(&write_wait_values);
             let write_hold_percentiles = duration_percentiles(&write_hold_values);
+            let write_latency_percentiles = duration_percentiles(&write_latency_values);
 
             println!(
                 "Connection summary | total={} | reads={} | writes={}",
@@ -306,9 +308,11 @@ async fn handle_client(
 
             println!("Read wait min/max: {read_wait_min_max:?}");
             println!("Read hold min/max: {read_hold_min_max:?}");
+            println!("Read latency min/max: {:?}", read_latency_min_max);
 
             println!("Write wait min/max: {write_wait_min_max:?}");
             println!("Write hold min/max: {write_hold_min_max:?}");
+            println!("Write latency min/max: {:?}", write_latency_min_max);
 
             print_duration_percentiles("Read wait percentiles", read_wait_percentiles);
 
@@ -317,6 +321,10 @@ async fn handle_client(
             print_duration_percentiles("Read hold percentiles", read_hold_percentiles);
 
             print_duration_percentiles("Write hold percentiles", write_hold_percentiles);
+
+            print_duration_percentiles("Read latency percentiles", read_latency_percentiles);
+
+            print_duration_percentiles("Write latency percentiles", write_latency_percentiles);
 
             break;
         }
