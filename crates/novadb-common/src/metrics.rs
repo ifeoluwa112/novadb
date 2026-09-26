@@ -106,7 +106,7 @@ pub fn percentile(values: &[Duration], percentile: f64) -> Option<Duration> {
 
     let mut sorted = values.to_vec();
 
-    sorted.sort();
+    sorted.sort_unstable();
 
     let rank = (percentile * sorted.len() as f64).ceil() as usize;
 
