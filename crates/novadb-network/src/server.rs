@@ -51,7 +51,6 @@ struct CollectedTiming {
 #[derive(Debug)]
 struct ConnectionSummary {
     total: usize,
-    total_connections: usize,
     read_count: usize,
     write_count: usize,
 
@@ -203,10 +202,7 @@ fn print_duration_percentiles(label: &str, percentiles: DurationPercentiles) {
     );
 }
 
-fn summarize_connection(
-    measurements: &[CollectedTiming],
-    total_connections: usize,
-) -> ConnectionSummary {
+fn summarize_connection(measurements: &[CollectedTiming]) -> ConnectionSummary {
     let mut read_count = 0;
     let mut write_count = 0;
 
@@ -280,7 +276,6 @@ fn summarize_connection(
 
     ConnectionSummary {
         total: measurements.len(),
-        total_connections,
         read_count,
         write_count,
 
@@ -355,9 +350,8 @@ pub async fn run() -> std::io::Result<()> {
 
         let database = Arc::clone(&database);
         let active_connections = Arc::clone(&active_connections);
-        let total_connections = Arc::clone(&total_connections);
         tokio::spawn(async move {
-            if let Err(error) = handle_client(stream, database, total_connections).await {
+            if let Err(error) = handle_client(stream, database).await {
                 println!("Client error: {error}");
             }
 
@@ -371,7 +365,6 @@ pub async fn run() -> std::io::Result<()> {
 async fn handle_client(
     mut stream: TcpStream,
     database: Arc<RwLock<Database>>,
-    total_connections: Arc<AtomicUsize>,
 ) -> std::io::Result<()> {
     let mut collector = ConnectionTimingCollector::new();
     let mut read_buffer = [0u8; 1024];
@@ -383,12 +376,11 @@ async fn handle_client(
             println!("Client disconnected");
 
             let measurements = collector.finish();
-            let accepted_clients = total_connections.load(Ordering::Relaxed);
 
-            let summary = summarize_connection(&measurements, accepted_clients);
+            let summary = summarize_connection(&measurements);
             println!(
-                "Connection summary | total_connections={} | total_commands={} | reads={} | writes={}",
-                summary.total_connections, summary.total, summary.read_count, summary.write_count,
+                "Connection summary | total_commands={} | reads={} | writes={}",
+                summary.total, summary.read_count, summary.write_count,
             );
             println!(
                 "Read timing  | wait_total={:?} | hold_total={:?} | latency_total={:?}",
@@ -676,10 +668,9 @@ mod tests {
 
         let measurements = collector.finish();
 
-        let summary = summarize_connection(&measurements, 42);
+        let summary = summarize_connection(&measurements);
 
         assert_eq!(summary.total, 3);
-        assert_eq!(summary.total_connections, 42);
         assert_eq!(summary.read_count, 2);
         assert_eq!(summary.write_count, 1);
         assert_eq!(summary.read_wait_total, Duration::from_micros(20));
