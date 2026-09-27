@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::thread;
 
-const CLIENTS: usize = 5;
+const CLIENTS: usize = 100;
 const COMMANDS_PER_CLIENT: usize = 20;
 
 fn main() {

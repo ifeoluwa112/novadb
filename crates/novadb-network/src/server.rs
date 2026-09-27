@@ -1,7 +1,14 @@
 use novadb_common::{Command, Measurement, MeasurementCollector, Metric, Operation};
-use std::sync::Mutex; // plain std Mutex — we never hold it across an .await
+use std::sync::Mutex;
 
 const REPORT_INTERVAL_SECS: u64 = 10;
+const READ_LATENCY_P99_SLO: Duration = Duration::from_micros(100);
+const WRITE_LATENCY_P99_SLO: Duration = Duration::from_micros(150);
+const SLO: SloThresholds = SloThresholds {
+    read_latency_p99: READ_LATENCY_P99_SLO,
+    write_latency_p99: WRITE_LATENCY_P99_SLO,
+};
+
 use novadb_common::Response;
 use novadb_common::{encode_error, encode_response};
 use novadb_protocol::{parse_command, parse_resp};
@@ -30,6 +37,11 @@ struct PendingCommand {
     response: Response,
     operation: Operation,
     timing: PendingCommandTiming,
+}
+
+struct SloThresholds {
+    read_latency_p99: Duration,
+    write_latency_p99: Duration,
 }
 
 fn execute_read_with_timing(
@@ -95,13 +107,13 @@ fn spawn_metrics_reporter(
                 std::mem::take(&mut *guard)
             };
 
-            report_window("READ", &read_window);
-            report_window("WRITE", &write_window);
+            report_window("READ", &read_window, SLO.read_latency_p99);
+            report_window("WRITE", &write_window, SLO.write_latency_p99);
         }
     });
 }
 
-fn report_window(label: &str, window: &MeasurementCollector) {
+fn report_window(label: &str, window: &MeasurementCollector, latency_slo: Duration) {
     if window.len() == 0 {
         println!("[{label}] no commands in the last {REPORT_INTERVAL_SECS}s window");
         return;
@@ -114,6 +126,26 @@ fn report_window(label: &str, window: &MeasurementCollector) {
                 stats.metric, stats.min, stats.max, stats.average, stats.p50, stats.p95, stats.p99
             );
         }
+    }
+
+    check_latency_slo(label, window, latency_slo);
+}
+
+fn check_latency_slo(label: &str, window: &MeasurementCollector, slo: Duration) {
+    let Some(stats) = window.statistics(Metric::Latency) else {
+        return;
+    };
+
+    if stats.p99 > slo {
+        println!(
+            "[{label}] SLO BREACH | latency p99={:?} exceeds promise of {:?}",
+            stats.p99, slo
+        );
+    } else {
+        println!(
+            "[{label}] SLO OK | latency p99={:?} within promise of {:?}",
+            stats.p99, slo
+        );
     }
 }
 
