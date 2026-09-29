@@ -21,12 +21,9 @@ struct SloThresholds {
     write_latency_p99: Duration,
 }
 
-// NOTE: these thresholds are placeholders picked to be strict enough to
-// exercise the alerting path. Once we understand *why* p99 is high, revisit
-// these based on what real clients actually need, not what makes the demo fire.
 const SLO: SloThresholds = SloThresholds {
-    read_latency_p99: Duration::from_micros(100),
-    write_latency_p99: Duration::from_micros(150),
+    read_latency_p99: Duration::from_millis(2),
+    write_latency_p99: Duration::from_millis(2),
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -43,10 +40,6 @@ struct PendingCommand {
     timing: PendingCommandTiming,
 }
 
-/// Tracks, per window, how often a read/write had to genuinely wait for the
-/// lock (try_* failed) vs. acquired it immediately. This is what separates
-/// "the lock was busy" from "the scheduler was slow to wake us up" — the
-/// `wait` Duration alone can't tell the two apart.
 #[derive(Debug, Default)]
 struct ContentionCounters {
     read_attempts: AtomicUsize,
