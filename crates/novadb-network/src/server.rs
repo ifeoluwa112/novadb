@@ -8,13 +8,13 @@ use novadb_common::{Command, Measurement, MeasurementCollector, Metric, Operatio
 use novadb_common::{Response, encode_error, encode_response};
 use novadb_protocol::{parse_command, parse_resp};
 use novadb_server::{execute_read, execute_write};
-use novadb_storage::Database;
+use novadb_storage::{Database, ShardedDatabase};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::RwLock;
 
 const REPORT_INTERVAL_SECS: u64 = 10;
+const SHARD_COUNT: usize = 16;
 
 struct SloThresholds {
     read_latency_p99: Duration,
@@ -178,11 +178,22 @@ fn report_contention(label: &str, attempts: usize, contended: usize) {
     );
 }
 
+fn command_key(command: &Command) -> Option<&str> {
+    match command {
+        Command::Get { key }
+        | Command::Delete { key }
+        | Command::Exists { key }
+        | Command::Ttl { key }
+        | Command::Set { key, .. } => Some(key),
+        Command::Keys => None,
+    }
+}
+
 pub async fn run() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
     println!("NovaDB listening on 127.0.0.1:6379");
 
-    let database = Arc::new(RwLock::new(Database::new()));
+    let database = Arc::new(ShardedDatabase::new(SHARD_COUNT));
     let active_connections = Arc::new(AtomicUsize::new(0));
     let total_connections = Arc::new(AtomicUsize::new(0));
 
@@ -228,7 +239,7 @@ pub async fn run() -> std::io::Result<()> {
 
 async fn handle_client(
     mut stream: TcpStream,
-    database: Arc<RwLock<Database>>,
+    database: Arc<ShardedDatabase>,
     read_metrics: Arc<Mutex<MeasurementCollector>>,
     write_metrics: Arc<Mutex<MeasurementCollector>>,
     contention: Arc<ContentionCounters>,
@@ -249,65 +260,102 @@ async fn handle_client(
             match parse_resp(&receive_buffer) {
                 Ok((value, consumed)) => match parse_command(value) {
                     Ok(command) => {
-                        let pending = match command {
-                            Command::Get { .. }
-                            | Command::Exists { .. }
-                            | Command::Keys
-                            | Command::Ttl { .. } => {
+                        let pending = match &command {
+                            // KEYS has no single key — it has to visit every shard.
+                            Command::Keys => {
                                 let latency_start = Instant::now();
-
-                                contention.read_attempts.fetch_add(1, Ordering::Relaxed);
-
                                 let lock_start = Instant::now();
-                                let db = match database.try_read() {
-                                    Ok(guard) => guard,
-                                    Err(_) => {
-                                        contention.read_contended.fetch_add(1, Ordering::Relaxed);
-                                        database.read().await
-                                    }
-                                };
-                                let wait_time = lock_start.elapsed();
 
-                                let (response, timing) = execute_read_with_timing(
-                                    &db,
-                                    command,
-                                    wait_time,
-                                    latency_start,
-                                );
+                                let mut keys = Vec::new();
+                                for shard in database.all_shards() {
+                                    let db = shard.read().await;
+                                    keys.extend(db.keys().cloned());
+                                }
+
+                                let hold = lock_start.elapsed(); // touching all 16 safes, lumped together — see note below
+                                let response = Response::BulkString(keys.join(" "));
 
                                 PendingCommand {
                                     response,
                                     operation: Operation::Read,
-                                    timing,
+                                    timing: PendingCommandTiming {
+                                        wait: Duration::ZERO,
+                                        hold,
+                                        latency_start,
+                                    },
                                 }
                             }
 
-                            Command::Set { .. } | Command::Delete { .. } => {
-                                let latency_start = Instant::now();
+                            // Every other command has exactly one key — route it to its shard.
+                            _ => {
+                                let key = command_key(&command)
+                                    .expect("non-Keys commands always have a key");
+                                let shard = database.shard_for(key);
 
-                                contention.write_attempts.fetch_add(1, Ordering::Relaxed);
+                                match &command {
+                                    Command::Get { .. }
+                                    | Command::Exists { .. }
+                                    | Command::Ttl { .. } => {
+                                        let latency_start = Instant::now();
+                                        contention.read_attempts.fetch_add(1, Ordering::Relaxed);
 
-                                let lock_start = Instant::now();
-                                let mut db = match database.try_write() {
-                                    Ok(guard) => guard,
-                                    Err(_) => {
-                                        contention.write_contended.fetch_add(1, Ordering::Relaxed);
-                                        database.write().await
+                                        let lock_start = Instant::now();
+                                        let db = match shard.try_read() {
+                                            Ok(guard) => guard,
+                                            Err(_) => {
+                                                contention
+                                                    .read_contended
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                                shard.read().await
+                                            }
+                                        };
+                                        let wait_time = lock_start.elapsed();
+
+                                        let (response, timing) = execute_read_with_timing(
+                                            &db,
+                                            command,
+                                            wait_time,
+                                            latency_start,
+                                        );
+
+                                        PendingCommand {
+                                            response,
+                                            operation: Operation::Read,
+                                            timing,
+                                        }
                                     }
-                                };
-                                let wait_time = lock_start.elapsed();
 
-                                let (response, timing) = execute_write_with_timing(
-                                    &mut db,
-                                    command,
-                                    wait_time,
-                                    latency_start,
-                                );
+                                    Command::Set { .. } | Command::Delete { .. } => {
+                                        let latency_start = Instant::now();
+                                        contention.write_attempts.fetch_add(1, Ordering::Relaxed);
 
-                                PendingCommand {
-                                    response,
-                                    operation: Operation::Write,
-                                    timing,
+                                        let lock_start = Instant::now();
+                                        let mut db = match shard.try_write() {
+                                            Ok(guard) => guard,
+                                            Err(_) => {
+                                                contention
+                                                    .write_contended
+                                                    .fetch_add(1, Ordering::Relaxed);
+                                                shard.write().await
+                                            }
+                                        };
+                                        let wait_time = lock_start.elapsed();
+
+                                        let (response, timing) = execute_write_with_timing(
+                                            &mut db,
+                                            command,
+                                            wait_time,
+                                            latency_start,
+                                        );
+
+                                        PendingCommand {
+                                            response,
+                                            operation: Operation::Write,
+                                            timing,
+                                        }
+                                    }
+
+                                    Command::Keys => unreachable!("handled above"),
                                 }
                             }
                         };
