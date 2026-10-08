@@ -9,5 +9,6 @@ members = [
     "crates/novadb-cli", 
     "crates/novadb-common",
     "crates/novadb-server",
-    "crates/novadb-bench"
+    "crates/novadb-bench",
+    "crates/novadb-api",
 ]
