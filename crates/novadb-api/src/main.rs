@@ -18,7 +18,10 @@ async fn main() {
         .expect("failed to connect to Postgres");
 
     let app = Router::new()
-        .route("/listings", get(routes::list_listings))
+        .route(
+            "/listings",
+            get(routes::list_listings).post(routes::create_listing),
+        )
         .route("/listings/:id", get(routes::get_listing))
         .with_state(pool);
 
