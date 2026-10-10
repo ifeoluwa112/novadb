@@ -1,28 +1,30 @@
-use crate::models::NewListing;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::auth::AuthUser;
 use crate::error::ApiError;
-use crate::models::{Listing, ListingDetail};
+use crate::models::{Listing, ListingDetail, NewListing};
+use crate::state::AppState;
 
-pub async fn list_listings(State(pool): State<PgPool>) -> Result<Json<Vec<Listing>>, ApiError> {
+/// Public: anyone can browse.
+pub async fn list_listings(State(state): State<AppState>) -> Result<Json<Vec<Listing>>, ApiError> {
     let listings = sqlx::query_as::<_, Listing>(
         "SELECT id, title, description, price_cents, status, created_at
          FROM listings
          WHERE status = 'active'
          ORDER BY created_at DESC",
     )
-    .fetch_all(&pool)
+    .fetch_all(&state.pool)
     .await?;
 
     Ok(Json(listings))
 }
 
+/// Public: anyone can view one listing.
 pub async fn get_listing(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<ListingDetail>, ApiError> {
     let listing = sqlx::query_as::<_, ListingDetail>(
@@ -39,14 +41,17 @@ pub async fn get_listing(
          WHERE listings.id = $1",
     )
     .bind(id)
-    .fetch_one(&pool)
+    .fetch_one(&state.pool)
     .await?;
 
     Ok(Json(listing))
 }
 
+/// Protected: the `user: AuthUser` parameter is the lock on this door.
+/// The seller is taken from the session, never from the request body.
 pub async fn create_listing(
-    State(pool): State<PgPool>,
+    State(state): State<AppState>,
+    user: AuthUser,
     Json(payload): Json<NewListing>,
 ) -> Result<(StatusCode, Json<Listing>), ApiError> {
     let title = payload.title.trim();
@@ -64,11 +69,11 @@ pub async fn create_listing(
          VALUES ($1, $2, $3, $4)
          RETURNING id, title, description, price_cents, status, created_at",
     )
-    .bind(payload.seller_id)
+    .bind(user.user_id)
     .bind(title)
     .bind(payload.description)
     .bind(payload.price_cents)
-    .fetch_one(&pool)
+    .fetch_one(&state.pool)
     .await?;
 
     Ok((StatusCode::CREATED, Json(listing)))
