@@ -23,7 +23,9 @@ pub async fn signup(
         return Err(ApiError::BadRequest("a valid email is required".into()));
     }
     if display_name.is_empty() {
-        return Err(ApiError::BadRequest("display_name must not be empty".into()));
+        return Err(ApiError::BadRequest(
+            "display_name must not be empty".into(),
+        ));
     }
     if payload.password.len() < MIN_PASSWORD_LEN {
         return Err(ApiError::BadRequest(format!(
@@ -62,12 +64,11 @@ pub async fn login(
         return Err(ApiError::InvalidCredentials);
     }
 
-    let row = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT id, password_hash FROM users WHERE email = $1",
-    )
-    .bind(&email)
-    .fetch_optional(&state.pool)
-    .await?;
+    let row =
+        sqlx::query_as::<_, (Uuid, String)>("SELECT id, password_hash FROM users WHERE email = $1")
+            .bind(&email)
+            .fetch_optional(&state.pool)
+            .await?;
 
     // Unknown email and wrong password produce the *same* error, so an
     // attacker cannot use this endpoint to discover which emails exist.
@@ -93,11 +94,11 @@ pub async fn login(
     }))
 }
 
-pub async fn logout(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<StatusCode, ApiError> {
-    state.sessions.delete(&auth::session_key(&user.token)).await?;
+pub async fn logout(State(state): State<AppState>, user: AuthUser) -> Result<StatusCode, ApiError> {
+    state
+        .sessions
+        .delete(&auth::session_key(&user.token))
+        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
