@@ -23,7 +23,6 @@ pub struct ListingDetail {
     pub seller_name: String,
 }
 
-/// Note: no seller_id. The seller is whoever is logged in.
 #[derive(Debug, Deserialize)]
 pub struct NewListing {
     pub title: String,
@@ -31,8 +30,20 @@ pub struct NewListing {
     pub price_cents: i32,
 }
 
-// No `Debug` on these two on purpose: a stray `{:?}` in a log line
-// would print the password.
+#[derive(Debug, Deserialize)]
+pub struct ListingsQuery {
+    pub limit: Option<i64>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListingsPage {
+    pub items: Vec<Listing>,
+    /// Pass this back as `?cursor=` to get the next page. Absent on the last page.
+    pub next_cursor: Option<String>,
+}
+
+// No Debug on credential-carrying types, so a stray `{:?}` can't log a password.
 #[derive(Deserialize)]
 pub struct SignupRequest {
     pub email: String,
@@ -46,8 +57,6 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-/// What the outside world may see of a user. Deliberately has no
-/// password_hash field, so it can never be serialized by accident.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct UserProfile {
     pub id: Uuid,

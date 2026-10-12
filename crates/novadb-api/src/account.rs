@@ -9,23 +9,24 @@ use crate::models::{LoginRequest, LoginResponse, SignupRequest, UserProfile};
 use crate::state::AppState;
 
 const MIN_PASSWORD_LEN: usize = 8;
-const MAX_PASSWORD_LEN: usize = 128; // stops someone making us hash a 10 MB "password"
+const MAX_PASSWORD_LEN: usize = 128;
+const MAX_EMAIL_LEN: usize = 254;
+const MAX_DISPLAY_NAME_LEN: usize = 60;
 
 pub async fn signup(
     State(state): State<AppState>,
     Json(payload): Json<SignupRequest>,
 ) -> Result<(StatusCode, Json<UserProfile>), ApiError> {
-    // Normalize first, so "Zed@Mail.com" and "zed@mail.com" are the same account.
     let email = payload.email.trim().to_lowercase();
     let display_name = payload.display_name.trim().to_string();
 
-    if email.len() < 3 || !email.contains('@') {
+    if email.len() < 3 || email.len() > MAX_EMAIL_LEN || !email.contains('@') {
         return Err(ApiError::BadRequest("a valid email is required".into()));
     }
-    if display_name.is_empty() {
-        return Err(ApiError::BadRequest(
-            "display_name must not be empty".into(),
-        ));
+    if display_name.is_empty() || display_name.chars().count() > MAX_DISPLAY_NAME_LEN {
+        return Err(ApiError::BadRequest(format!(
+            "display_name must be 1-{MAX_DISPLAY_NAME_LEN} characters"
+        )));
     }
     if payload.password.len() < MIN_PASSWORD_LEN {
         return Err(ApiError::BadRequest(format!(
@@ -38,7 +39,7 @@ pub async fn signup(
         )));
     }
 
-    let password_hash = auth::hash_password(payload.password).await?;
+    let password_hash = auth::hash_password(&state.hash_limiter, payload.password).await?;
 
     let user = sqlx::query_as::<_, UserProfile>(
         "INSERT INTO users (email, password_hash, display_name)
@@ -49,7 +50,7 @@ pub async fn signup(
     .bind(password_hash)
     .bind(&display_name)
     .fetch_one(&state.pool)
-    .await?; // a duplicate email becomes a 409 via the 23505 mapping
+    .await?;
 
     Ok((StatusCode::CREATED, Json(user)))
 }
@@ -64,17 +65,26 @@ pub async fn login(
         return Err(ApiError::InvalidCredentials);
     }
 
-    let row =
-        sqlx::query_as::<_, (Uuid, String)>("SELECT id, password_hash FROM users WHERE email = $1")
-            .bind(&email)
-            .fetch_optional(&state.pool)
-            .await?;
+    let row = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT id, password_hash FROM users WHERE email = $1",
+    )
+    .bind(&email)
+    .fetch_optional(&state.pool)
+    .await?;
 
-    // Unknown email and wrong password produce the *same* error, so an
-    // attacker cannot use this endpoint to discover which emails exist.
-    let (user_id, stored_hash) = row.ok_or(ApiError::InvalidCredentials)?;
+    let Some((user_id, stored_hash)) = row else {
+        // Unknown email: do the same expensive work a real check would do,
+        // so the response time doesn't reveal which emails exist.
+        let _ = auth::verify_password(
+            &state.hash_limiter,
+            payload.password,
+            state.dummy_hash.to_string(),
+        )
+        .await?;
+        return Err(ApiError::InvalidCredentials);
+    };
 
-    if !auth::verify_password(payload.password, stored_hash).await? {
+    if !auth::verify_password(&state.hash_limiter, payload.password, stored_hash).await? {
         return Err(ApiError::InvalidCredentials);
     }
 
@@ -94,11 +104,11 @@ pub async fn login(
     }))
 }
 
-pub async fn logout(State(state): State<AppState>, user: AuthUser) -> Result<StatusCode, ApiError> {
-    state
-        .sessions
-        .delete(&auth::session_key(&user.token))
-        .await?;
+pub async fn logout(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    state.sessions.delete(&auth::session_key(&user.token)).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
