@@ -78,7 +78,7 @@ pub fn generate_token() -> String {
 }
 
 pub fn session_key(token: &str) -> String {
-    format!("session:{token}").to_string()
+    return format!("session:{token}");
 }
 
 #[derive(Debug, Clone)]
