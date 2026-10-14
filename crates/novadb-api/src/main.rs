@@ -30,8 +30,7 @@ fn env_parse<T: std::str::FromStr>(name: &str, default: T) -> T {
 async fn main() {
     let database_url = std::env::var("DATABASE_URL")
         .expect("DATABASE_URL must be set, e.g. postgres://youruser@localhost/novadb");
-    let nova_addr =
-        std::env::var("NOVADB_ADDR").unwrap_or_else(|_| "127.0.0.1:6379".to_string());
+    let nova_addr = std::env::var("NOVADB_ADDR").unwrap_or_else(|_| "127.0.0.1:6379".to_string());
     let port: u16 = env_parse("PORT", 3000);
     let db_max_connections: u32 = env_parse("DB_MAX_CONNECTIONS", 10);
 
