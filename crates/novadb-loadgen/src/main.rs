@@ -88,7 +88,7 @@ async fn one_request(client: &Client, cfg: &Config) -> Outcome {
 }
 
 /// Nearest-rank percentile: the same method as your metrics.rs.
-fn percentile(sorted: &[Duration], p: f64) -> Duration {
+fn percentile(sorted: &[Duration], p: f64) -> Duration { 
     let rank = (p * sorted.len() as f64).ceil() as usize;
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
