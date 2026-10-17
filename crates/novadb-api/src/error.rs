@@ -48,7 +48,7 @@ impl From<NovaError> for ApiError {
     fn from(error: NovaError) -> Self {
         eprintln!("session store error: {error:?}");
         match error {
-            NovaError::Io(_) => ApiError::Unavailable,
+            NovaError::Io(_) | NovaError::Timeout => ApiError::Unavailable,
             NovaError::Protocol(_) => ApiError::Internal,
         }
     }

@@ -146,7 +146,7 @@ async fn main() {
         let client = client.clone();
         let cfg = Arc::clone(&cfg);
         workers.push(tokio::spawn(async move {
-            let mut samples = Vec::new();
+            let mut samples: Vec<Sample> = Vec::new();
             while Instant::now() < deadline {
                 let started_at = Instant::now();
                 let outcome = one_request(&client, &cfg).await;
