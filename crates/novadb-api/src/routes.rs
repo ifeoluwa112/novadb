@@ -38,7 +38,10 @@ pub async fn list_listings(
     State(state): State<AppState>,
     Query(params): Query<ListingsQuery>,
 ) -> Result<Json<ListingsPage>, ApiError> {
-    let limit = params.limit.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE);
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_PAGE_SIZE)
+        .clamp(1, MAX_PAGE_SIZE);
 
     // Ask for one extra row. If it exists there is a next page; we never show it.
     let mut rows = match params.cursor {
@@ -73,7 +76,8 @@ pub async fn list_listings(
 
     let next_cursor = if rows.len() as i64 > limit {
         rows.truncate(limit as usize);
-        rows.last().map(|last| encode_cursor(last.created_at, last.id))
+        rows.last()
+            .map(|last| encode_cursor(last.created_at, last.id))
     } else {
         None
     };

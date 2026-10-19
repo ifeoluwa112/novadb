@@ -44,6 +44,12 @@ impl From<sqlx::Error> for ApiError {
     }
 }
 
+impl From<std::io::Error> for NovaError {
+    fn from(error: std::io::Error) -> Self {
+        NovaError::Io(error)
+    }
+}
+
 impl From<NovaError> for ApiError {
     fn from(error: NovaError) -> Self {
         eprintln!("session store error: {error:?}");

@@ -19,12 +19,6 @@ pub enum NovaError {
     Timeout,
 }
 
-impl From<std::io::Error> for NovaError {
-    fn from(error: std::io::Error) -> Self {
-        NovaError::Io(error)
-    }
-}
-
 #[derive(Debug)]
 #[allow(unused)]
 enum Reply {
