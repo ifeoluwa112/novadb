@@ -70,3 +70,10 @@ pub struct LoginResponse {
     pub token: String,
     pub expires_in_seconds: u64,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateListing {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub price_cents: Option<i32>,
+}

@@ -11,6 +11,7 @@ pub enum ApiError {
     BadRequest(String),
     Conflict(String),
     Unauthorized,
+    Forbidden,
     InvalidCredentials,
     /// A dependency is down or overloaded. Our service is fine; try again shortly.
     Unavailable,
@@ -69,6 +70,10 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "authentication required".to_string(),
+            ),
+            ApiError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "you do not have permission to do that".to_string(),
             ),
             ApiError::InvalidCredentials => (
                 StatusCode::UNAUTHORIZED,

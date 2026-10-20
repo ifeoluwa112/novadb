@@ -6,8 +6,11 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::error::ApiError;
-use crate::models::{Listing, ListingDetail, ListingsPage, ListingsQuery, NewListing};
+use crate::models::{
+    Listing, ListingDetail, ListingsPage, ListingsQuery, NewListing, UpdateListing,
+};
 use crate::state::AppState;
+use sqlx::PgPool;
 
 const DEFAULT_PAGE_SIZE: i64 = 20;
 const MAX_PAGE_SIZE: i64 = 50;
@@ -113,37 +116,51 @@ pub async fn get_listing(
     Ok(Json(listing))
 }
 
+fn clean_title(raw: &str) -> Result<String, ApiError> {
+    let title = raw.trim();
+    if title.is_empty() || title.chars().count() > MAX_TITLE_LEN {
+        return Err(ApiError::BadRequest(format!(
+            "title must be 1-{MAX_TITLE_LEN} characters"
+        )));
+    }
+    Ok(title.to_string())
+}
+
+/// Returns None when the description is blank after trimming.
+fn clean_description(raw: &str) -> Result<Option<String>, ApiError> {
+    let description = raw.trim();
+    if description.is_empty() {
+        return Ok(None);
+    }
+    if description.chars().count() > MAX_DESCRIPTION_LEN {
+        return Err(ApiError::BadRequest(format!(
+            "description must be at most {MAX_DESCRIPTION_LEN} characters"
+        )));
+    }
+    Ok(Some(description.to_string()))
+}
+
+fn check_price(price_cents: i32) -> Result<i32, ApiError> {
+    if !(0..=MAX_PRICE_CENTS).contains(&price_cents) {
+        return Err(ApiError::BadRequest(
+            "price_cents is out of the allowed range".into(),
+        ));
+    }
+    Ok(price_cents)
+}
+
 /// Protected: the seller is whoever is logged in.
 pub async fn create_listing(
     State(state): State<AppState>,
     user: AuthUser,
     Json(payload): Json<NewListing>,
 ) -> Result<(StatusCode, Json<Listing>), ApiError> {
-    let title = payload.title.trim();
-    if title.is_empty() || title.chars().count() > MAX_TITLE_LEN {
-        return Err(ApiError::BadRequest(format!(
-            "title must be 1-{MAX_TITLE_LEN} characters"
-        )));
-    }
-
-    let description = payload
-        .description
-        .as_deref()
-        .map(str::trim)
-        .filter(|d| !d.is_empty());
-    if let Some(description) = description {
-        if description.chars().count() > MAX_DESCRIPTION_LEN {
-            return Err(ApiError::BadRequest(format!(
-                "description must be at most {MAX_DESCRIPTION_LEN} characters"
-            )));
-        }
-    }
-
-    if payload.price_cents < 0 || payload.price_cents > MAX_PRICE_CENTS {
-        return Err(ApiError::BadRequest(
-            "price_cents is out of the allowed range".into(),
-        ));
-    }
+    let title = clean_title(&payload.title)?;
+    let description = match payload.description.as_deref() {
+        Some(raw) => clean_description(raw)?,
+        None => None,
+    };
+    let price_cents = check_price(payload.price_cents)?;
 
     let listing = sqlx::query_as::<_, Listing>(
         "INSERT INTO listings (seller_id, title, description, price_cents)
@@ -151,11 +168,76 @@ pub async fn create_listing(
          RETURNING id, title, description, price_cents, status, created_at",
     )
     .bind(user.user_id)
-    .bind(title)
-    .bind(description)
-    .bind(payload.price_cents)
+    .bind(title.as_str())
+    .bind(description.as_deref())
+    .bind(price_cents)
     .fetch_one(&state.pool)
     .await?;
 
     Ok((StatusCode::CREATED, Json(listing)))
+}
+
+/// Protected, owner only: change any subset of title, description, price.
+pub async fn update_listing(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<UpdateListing>,
+) -> Result<Json<Listing>, ApiError> {
+    if payload.title.is_none() && payload.description.is_none() && payload.price_cents.is_none() {
+        return Err(ApiError::BadRequest("nothing to update".into()));
+    }
+
+    let title = payload.title.as_deref().map(clean_title).transpose()?;
+    let description = match payload.description.as_deref() {
+        Some(raw) => Some(
+            clean_description(raw)?
+                .ok_or_else(|| ApiError::BadRequest("description must not be empty".into()))?,
+        ),
+        None => None,
+    };
+    let price_cents = payload.price_cents.map(check_price).transpose()?;
+
+    // The ownership and status checks live inside the UPDATE itself, so
+    // "check, then change" happens as ONE atomic statement. A separate
+    // SELECT-then-UPDATE would leave a gap where the listing could be sold
+    // between the two steps: the same read-then-write gap as the lost update.
+    let updated = sqlx::query_as::<_, Listing>(
+        "UPDATE listings
+         SET title       = COALESCE($3::text, title),
+             description = COALESCE($4::text, description),
+             price_cents = COALESCE($5::int4, price_cents)
+         WHERE id = $1 AND seller_id = $2 AND status = 'active'
+         RETURNING id, title, description, price_cents, status, created_at",
+    )
+    .bind(id)
+    .bind(user.user_id)
+    .bind(title.as_deref())
+    .bind(description.as_deref())
+    .bind(price_cents)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match updated {
+        Some(listing) => Ok(Json(listing)),
+        None => Err(why_not_changed(&state.pool, id, user.user_id).await),
+    }
+}
+
+/// Zero rows changed. Work out why, so the client gets an honest answer.
+/// This lookup only chooses the error message. It can't affect correctness,
+/// because the UPDATE above already refused to touch the row.
+async fn why_not_changed(pool: &PgPool, id: Uuid, user_id: Uuid) -> ApiError {
+    let row =
+        sqlx::query_as::<_, (Uuid, String)>("SELECT seller_id, status FROM listings WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await;
+
+    match row {
+        Ok(None) => ApiError::NotFound,
+        Ok(Some((seller_id, _))) if seller_id != user_id => ApiError::Forbidden,
+        Ok(Some(_)) => ApiError::Conflict("listing can no longer be changed".into()),
+        Err(error) => error.into(),
+    }
 }
