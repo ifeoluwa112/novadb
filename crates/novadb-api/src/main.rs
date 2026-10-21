@@ -70,7 +70,7 @@ async fn main() {
         )
         .route(
             "/listings/:id",
-            get(routes::get_listing).patch(routes::update_listing),
+            get(routes::get_listing).patch(routes::update_listing).delete(routes::delete_listing),
         )
         // Nothing legitimate here is bigger than 64 KB of JSON.
         .layer(DefaultBodyLimit::max(64 * 1024))

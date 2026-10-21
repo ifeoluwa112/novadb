@@ -224,6 +224,45 @@ pub async fn update_listing(
     }
 }
 
+// Delete a listing that is still active. The row must exist, be owned by the
+// caller, and not be sold yet. The DELETE returns the row if it was actually
+// deleted, or nothing if it was not. We then check why it was not deleted,
+// so the client gets an honest answer. This is a single atomic statement, so
+// there is no race condition where the listing could be sold between a
+// separate SELECT and DELETE.
+
+pub async fn delete_listing(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let deleted = sqlx::query(
+        "DELETE FROM listings
+         WHERE id = $1 AND seller_id = $2 AND status = 'active'
+         RETURNING id",
+    )
+    .bind(id)
+    .bind(user.user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    match deleted {
+        Some(_) => {
+            sqlx::query(
+                "UPDATE listings
+         SET status = 'removed'
+         WHERE id = $1 AND seller_id = $2 AND status = 'active'",
+            )
+            .bind(id)
+            .bind(user.user_id)
+            .execute(&state.pool)
+            .await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        None => Err(why_not_changed(&state.pool, id, user.user_id).await),
+    }
+}
+
 /// Zero rows changed. Work out why, so the client gets an honest answer.
 /// This lookup only chooses the error message. It can't affect correctness,
 /// because the UPDATE above already refused to touch the row.
