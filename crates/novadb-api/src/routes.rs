@@ -236,19 +236,20 @@ pub async fn delete_listing(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    let deleted = sqlx::query(
-        "DELETE FROM listings
-         WHERE id = $1 AND seller_id = $2 AND status = 'active'
-         RETURNING id",
+    let result = sqlx::query(
+        "UPDATE listings
+         SET status = 'removed'
+         WHERE id = $1 AND seller_id = $2 AND status = 'active'",
     )
     .bind(id)
     .bind(user.user_id)
-    .fetch_optional(&state.pool)
+    .execute(&state.pool)
     .await?;
 
-    match deleted {
-        Some(_) => Ok(StatusCode::NO_CONTENT),
-        None => Err(why_not_changed(&state.pool, id, user.user_id).await),
+    if result.rows_affected() == 1 {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(why_not_changed(&state.pool, id, user.user_id).await)
     }
 }
 
