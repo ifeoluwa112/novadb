@@ -247,18 +247,7 @@ pub async fn delete_listing(
     .await?;
 
     match deleted {
-        Some(_) => {
-            sqlx::query(
-                "UPDATE listings
-         SET status = 'removed'
-         WHERE id = $1 AND seller_id = $2 AND status = 'active'",
-            )
-            .bind(id)
-            .bind(user.user_id)
-            .execute(&state.pool)
-            .await?;
-            Ok(StatusCode::NO_CONTENT)
-        }
+        Some(_) => Ok(StatusCode::NO_CONTENT),
         None => Err(why_not_changed(&state.pool, id, user.user_id).await),
     }
 }
