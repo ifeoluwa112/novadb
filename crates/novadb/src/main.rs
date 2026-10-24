@@ -2,6 +2,6 @@ use novadb_network::run;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    run().await?;
+    let _ = run().await?;
     Ok(())
 }
